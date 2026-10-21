@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Xml.Linq;
 
 namespace AutoCadMcpInstaller;
 
@@ -43,7 +44,7 @@ internal sealed class MainForm : Form
             var supported = cad.Version == "2025";
             var item = new ListViewItem($"AutoCAD {cad.Version}"); item.SubItems.Add(cad.Series);
             var bundle = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Autodesk", "ApplicationPlugins", "AutoCadMcp.bundle", "PackageContents.xml");
-            item.SubItems.Add(supported ? (File.Exists(bundle) ? "已安装（启动 CAD 后检测连接）" : "可安装 MCP 0.5.0") : "此版本插件构建尚未发布");
+            item.SubItems.Add(supported ? (File.Exists(bundle) ? "已安装（启动 CAD 后检测连接）" : "可安装 MCP 0.5.2") : "此版本插件构建尚未发布");
             item.Tag = cad; list.Items.Add(item);
         }
         if (installations.Count == 0) status.Text = "未发现 AutoCAD 2020–2026。安装 AutoCAD 后点“重新检测”。";
@@ -63,15 +64,86 @@ internal sealed class MainForm : Form
                 using var root = baseKey.OpenSubKey("SOFTWARE\\Autodesk\\AutoCAD"); if (root is null) continue;
                 foreach (var name in root.GetSubKeyNames())
                 {
-                    using var key = root.OpenSubKey(name); var product = key?.GetValue("ProductName")?.ToString() ?? "";
-                    var match = System.Text.RegularExpressions.Regex.Match(product + " " + name, @"20(20|21|22|23|24|25|26)");
-                    if (!match.Success) continue;
-                    var v = match.Value; found.TryAdd(v, new CadInstall(v, name, key?.GetValue("Location")?.ToString()));
+                    using var key = root.OpenSubKey(name);
+                    var product = key?.GetValue("ProductName")?.ToString() ?? "";
+                    var year = ParseCadYear(product + " " + name);
+                    if (year is null) year = YearFromSeries(name);
+                    if (year is null) continue;
+                    found.TryAdd(year, new CadInstall(year, name, key?.GetValue("Location")?.ToString()));
                 }
             }
             catch { }
         }
-        return found.Values.OrderByDescending(x => x.Version).ToList();
+        // The Autodesk registration tree can omit ProductName/Location. Also inspect
+        // uninstall metadata and conventional product paths so those installations
+        // are still visible without assuming a single edition/language folder.
+        foreach (var hive in new[] { RegistryHive.LocalMachine, RegistryHive.CurrentUser })
+        foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+        {
+            try
+            {
+                using var baseKey = RegistryKey.OpenBaseKey(hive, view);
+                using var uninstall = baseKey.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall");
+                if (uninstall is null) continue;
+                foreach (var subName in uninstall.GetSubKeyNames())
+                {
+                    using var sub = uninstall.OpenSubKey(subName);
+                    var display = sub?.GetValue("DisplayName")?.ToString() ?? "";
+                    var year = ParseCadYear(display);
+                    if (year is null || !display.Contains("AutoCAD", StringComparison.OrdinalIgnoreCase)) continue;
+                    var loc = sub?.GetValue("InstallLocation")?.ToString();
+                    if (string.IsNullOrWhiteSpace(loc) || !File.Exists(Path.Combine(loc, "acad.exe")))
+                        loc = FindConventionalLocation(year);
+                    if (found.TryGetValue(year, out var existing))
+                    {
+                        if (string.IsNullOrWhiteSpace(existing.Location) && !string.IsNullOrWhiteSpace(loc))
+                            found[year] = existing with { Location = loc };
+                    }
+                    else found.Add(year, new CadInstall(year, subName, loc));
+                }
+            }
+            catch { }
+        }
+        foreach (var year in new[] { "2020", "2021", "2022", "2023", "2024", "2025", "2026" })
+        {
+            if (found.TryGetValue(year, out var existing) && !string.IsNullOrWhiteSpace(existing.Location)) continue;
+            var loc = FindConventionalLocation(year);
+            if (loc is null) continue;
+            if (existing is not null) found[year] = existing with { Location = loc };
+            else found[year] = new CadInstall(year, "Detected by installation path", loc);
+        }
+        return found.Values.OrderByDescending(x => int.Parse(x.Version)).ToList();
+    }
+
+    private static string? ParseCadYear(string value)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(value, @"(?<!\d)20(20|21|22|23|24|25|26)(?!\d)");
+        return match.Success ? match.Value : null;
+    }
+
+    private static string? YearFromSeries(string value) => value.ToUpperInvariant() switch
+    {
+        "R23.1" => "2020", "R24.0" => "2021", "R24.1" => "2022", "R24.2" => "2023",
+        "R24.3" => "2024", "R25.0" => "2025", "R26.0" => "2026", _ => null
+    };
+
+    private static string? FindConventionalLocation(string year)
+    {
+        foreach (var root in new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) }.Where(x => !string.IsNullOrWhiteSpace(x)))
+        {
+            var autodesk = Path.Combine(root, "Autodesk");
+            if (!Directory.Exists(autodesk)) continue;
+            try
+            {
+                foreach (var dir in Directory.EnumerateDirectories(autodesk, "*" + year + "*", SearchOption.TopDirectoryOnly))
+                {
+                    var exe = Path.Combine(dir, "acad.exe");
+                    if (File.Exists(exe)) return dir;
+                }
+            }
+            catch { }
+        }
+        return null;
     }
 
     private CadInstall? Selected() => list.SelectedItems.Count == 0 ? null : list.SelectedItems[0].Tag as CadInstall;
@@ -96,6 +168,13 @@ internal sealed class MainForm : Form
             if (!string.IsNullOrEmpty(expected) && !hash.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("下载文件 SHA-256 校验失败，未安装。");
             ZipFile.ExtractToDirectory(zip, temp);
             var bundle = Directory.GetDirectories(temp, "AutoCadMcp.bundle", SearchOption.AllDirectories).FirstOrDefault() ?? throw new InvalidDataException("安装包内找不到 AutoCadMcp.bundle。");
+            var manifestPath = Path.Combine(bundle, "PackageContents.xml");
+            var xml = XDocument.Load(manifestPath);
+            var minSeries = xml.Root?.Element("Components")?.Element("RuntimeRequirements")?.Attribute("SeriesMin")?.Value;
+            if (!string.Equals(minSeries, cad.Series, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"包系列号 {minSeries ?? "missing"} 与所选 AutoCAD {cad.Version} ({cad.Series}) 不匹配。未安装。");
+            var dll = Path.Combine(bundle, "Contents", "Windows", "AutoCadMcpPluginV2.dll");
+            if (!File.Exists(dll)) throw new InvalidDataException("bundle 中缺少插件 DLL，未安装。");
             var targetRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Autodesk", "ApplicationPlugins"); Directory.CreateDirectory(targetRoot);
             var target = Path.Combine(targetRoot, "AutoCadMcp.bundle"); var stage = target + ".stage-" + Guid.NewGuid().ToString("N"); var backup = target + ".backup-" + DateTime.Now.ToString("yyyyMMddHHmmss");
             CopyDirectory(bundle, stage); if (Directory.Exists(target)) Directory.Move(target, backup);
@@ -118,6 +197,11 @@ internal sealed class MainForm : Form
     {
         var cad = Selected(); if (cad is null) { status.Text = "先选择一个 AutoCAD 版本。"; return; }
         var exe = cad.Location is null ? null : Path.Combine(cad.Location, "acad.exe");
+        if (exe is null || !File.Exists(exe))
+        {
+            var resolved = FindConventionalLocation(cad.Version);
+            exe = resolved is null ? null : Path.Combine(resolved, "acad.exe");
+        }
         if (exe is null || !File.Exists(exe)) { status.Text = $"AutoCAD {cad.Version} 已检测到，但注册表未给出有效 acad.exe 路径。"; return; }
         Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true }); status.Text = $"已启动 AutoCAD {cad.Version}。插件状态需在 AutoCAD 内通过 get_bridge_status 确认。";
     }
