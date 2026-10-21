@@ -35,7 +35,7 @@ internal sealed class MainForm : Form
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(8) };
         buttons.Controls.AddRange([refresh, install, open, testConnection]);
         Controls.Add(buttons); Controls.Add(status); Controls.Add(list);
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("AutoCadMcpInstaller/0.5.6");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("AutoCadMcpInstaller/0.5.8");
         refresh.Click += (_, _) => Detect(); install.Click += async (_, _) => await InstallSelected(); open.Click += (_, _) => OpenSelected();
         testConnection.Click += async (_, _) => await TestConnection();
         Shown += (_, _) => Detect();
@@ -53,8 +53,8 @@ internal sealed class MainForm : Form
             item.SubItems.Add(supported ? (IsBundleInstalledFor(cad, bundle) ? "该系列插件已安装（启动 CAD 后检测连接）" : "可按本机 API 构建并安装") : "缺少 AutoCAD API 或 .NET 运行时信息");
             item.Tag = cad; list.Items.Add(item);
         }
-        if (installations.Count == 0) status.Text = "未发现 AutoCAD 2020–2026。安装 AutoCAD 后点“重新检测”。";
-        else status.Text = $"检测到 {installations.Count} 个 AutoCAD 安装。安装时按本机 API/运行时编译插件；AutoCAD 2020–2026 中仅处理能识别 API 文件和运行时的版本。";
+        if (installations.Count == 0) status.Text = "未发现 AutoCAD 2020–2027。安装 AutoCAD 后点“重新检测”。";
+        else status.Text = $"检测到 {installations.Count} 个 AutoCAD 安装。安装时按本机 API/运行时编译插件；AutoCAD 2020–2027 中仅处理能识别 API 文件和运行时的版本。";
         if (list.Items.Count > 0)
         {
             var item = list.Items.Cast<ListViewItem>().FirstOrDefault(x => (x.Tag as CadInstall)?.Version == selectedYear) ?? list.Items[0];
@@ -114,7 +114,7 @@ internal sealed class MainForm : Form
             }
             catch { }
         }
-        foreach (var year in new[] { "2020", "2021", "2022", "2023", "2024", "2025", "2026" })
+        foreach (var year in new[] { "2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027" })
         {
             if (found.TryGetValue(year, out var existing) && !string.IsNullOrWhiteSpace(existing.Location)) continue;
             var loc = FindConventionalLocation(year);
@@ -263,10 +263,7 @@ internal sealed class MainForm : Form
     }
 
     private static string? ParseCadYear(string value)
-    {
-        var match = System.Text.RegularExpressions.Regex.Match(value, @"(?<!\d)20(20|21|22|23|24|25|26)(?!\d)");
-        return match.Success ? match.Value : null;
-    }
+        => CadCompatibility.ParseYear(value);
 
     private static string? YearFromSeries(string value) => CadCompatibility.YearFromSeries(value);
 
