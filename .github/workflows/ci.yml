@@ -15,3 +15,28 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run check
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet run --project test/InstallerCompatibility.Tests.csproj -c Release
+      - run: dotnet build installer/AutoCadMcpInstaller.csproj -c Release --verbosity quiet
+      - name: Validate AutoCAD plugin target framework selection
+        shell: pwsh
+        run: |
+          $cases = @(
+            @{ Year = '2020'; Major = '8'; Expected = 'net47' },
+            @{ Year = '2021'; Major = '8'; Expected = 'net48' },
+            @{ Year = '2024'; Major = '8'; Expected = 'net48' },
+            @{ Year = '2025'; Major = '8'; Expected = 'net8.0-windows' },
+            @{ Year = '2025'; Major = '10'; Expected = 'net10.0-windows' },
+            @{ Year = '2026'; Major = '8'; Expected = 'net8.0-windows' },
+            @{ Year = '2026'; Major = '10'; Expected = 'net10.0-windows' }
+          )
+          foreach ($case in $cases) {
+            $actual = dotnet msbuild plugin/AutoCadMcpPlugin.Legacy.csproj -getProperty:TargetFramework "-p:CadYear=$($case.Year)" "-p:DotNetMajor=$($case.Major)" -nologo
+            if ($actual.Trim() -ne $case.Expected) { throw "AutoCAD $($case.Year) .NET $($case.Major): expected $($case.Expected), got $actual" }
+          }

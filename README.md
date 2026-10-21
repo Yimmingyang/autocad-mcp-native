@@ -7,11 +7,11 @@
 
 **AutoCAD MCP Native Bridge** 是 Windows 本机 MCP 桥接项目。Node.js MCP 服务通过命名管道与 AutoCAD 进程内的 .NET 插件通信，使兼容 MCP 客户端能够读取图纸状态、检查几何，并通过 AutoCAD API 执行编辑操作。
 
-> **当前验证范围：AutoCAD 2025 / R25.0、Windows x64。** 本仓库包含 0.5.0 操作层和 2025 插件包。AutoCAD 2020–2024、2026 尚无本仓库提供并验证的对应插件构建；不要把 2025 DLL 加载到其它版本。跨版本安装 GUI 是后续路线，不代表当前版本已支持所有 2020+。
+> **实机验证范围：AutoCAD 2025 / R25.0 / Windows x64。** 安装器现可按 AutoCAD 本机 API 和 .NET 运行时动态编译 2020–2026 插件，不再把 2025 DLL 错装到其它版本；但 2020–2024、2025 .NET 10 更新版和 2026 的宿主加载/连接仍需逐类实机验证，不将“能编译”当作“实机兼容”。
 
 ### Windows 安装器
 
-仓库新增 `installer/` WinForms 安装器：扫描 AutoCAD 2020–2026 并显示构建号；对已验证的 AutoCAD 2025 `R25.0.*` 包执行下载、SHA-256 校验与备份安装；部署便携 Node.js LTS、MCP 服务并更新 Codex 配置，提供实际 `get_bridge_status` 连接测试。**检测到版本不等于该版本已被插件支持**；当前仅放行已测的 AutoCAD 2025 `R25.0.*` 构建，2020–2024、2025 其他更新构建和 2026 尚无对应插件包，安装器会阻止不匹配安装。
+仓库新增 `installer/` WinForms 安装器：扫描 AutoCAD 2020–2026 并显示构建号；安装时依据目标 AutoCAD 的 `acmgd.dll`、`acdbmgd.dll`、`accoremgd.dll` 和运行时配置在本机编译插件，生成对应 Bundle 后备份安装；部署便携 Node.js LTS、MCP 服务并更新 Codex 配置，提供 `get_bridge_status` 连接测试。AutoCAD 2020–2024 使用 .NET Framework 4.7/4.8 目标并以 .NET 8 SDK 构建；AutoCAD 2025/2026 根据 `acdbmgd.runtimeconfig.json` 选择 .NET 8 或 .NET 10 SDK。编译和 Bundle 系列校验是安装门槛，仍需目标 AutoCAD 实机加载/连接确认。
 
 构建安装器：使用 Windows .NET 8 SDK 运行 `dotnet publish installer/AutoCadMcpInstaller.csproj -c Release -o installer/publish`。单文件输出为 `installer/publish/AutoCadMcpInstaller.exe`。
 
@@ -23,15 +23,19 @@
 - 执行复制、移动、旋转、镜像、偏移、阵列、删除和属性修改。
 - 通过 `list_tools` / `cad_call` 发现和调用原生操作。
 - `preview_drawing_plan` 与 `apply_drawing_plan` 支持批量计划验证和事务应用。
-- MCP 使用 stdio；AutoCAD 端只监听本机命名管道 `AutoCAD_MCP_2025_V2`，不开放 TCP 端口、不使用 OAuth。
+- MCP 使用 stdio；AutoCAD 端只监听本机命名管道 `AutoCAD_MCP_<年份>_V2`，不开放 TCP 端口、不使用 OAuth。
 
 ### 要求
 
-- Windows x64；AutoCAD 2025 (R25.0)。
-- Node.js 20 LTS+；首次 `npm ci` 需要 npm registry 网络。
+- Windows x64；AutoCAD 2020–2026（安装时需要相应 API 文件和可识别的 .NET 运行时）。
+- 安装器可部署便携 Node.js LTS 和从 Microsoft 官方源校验下载的 .NET SDK；编译阶段需要访问 GitHub 源码与 NuGet。
 - 兼容 MCP 客户端（示例为 Codex）。插件从源码构建需要 AutoCAD 2025 API DLL。
 
 ### 快速安装
+
+从 [GitHub Releases](https://github.com/yanmiong/autocad-mcp-native/releases/latest) 下载 `AutoCadMcpInstaller.exe`，运行后选择 AutoCAD 版本并点“安装/修复”。安装期间关闭 AutoCAD。安装器会备份旧插件和 Codex MCP 配置；打开对应 AutoCAD 后点“测试 MCP 连接”。
+
+手动运行 MCP 服务或开发服务端时，可以从源码安装：
 
 ```powershell
 git clone https://github.com/yanmiong/autocad-mcp-native.git
@@ -39,17 +43,6 @@ cd autocad-mcp-native
 npm ci
 npm test
 npm run check
-.\release\Install-AutoCadMcp.ps1
-```
-
-先关闭 AutoCAD 再运行插件安装脚本。启动 AutoCAD 2025 并打开一张图纸后，在 `%USERPROFILE%\.codex\config.toml` 添加（将路径替换为实际目录）：
-
-```toml
-[mcp_servers.autocad_2025]
-command = "node"
-args = ["C:\\Tools\\autocad-mcp-native\\src\\index.js"]
-startup_timeout_sec = 30
-tool_timeout_sec = 180
 ```
 
 重启 Codex，先调用 `get_bridge_status`、`drawing_summary` 等只读工具确认连接，再进行写操作。完整安装、更新、卸载说明见 [`docs/安装与使用.md`](docs/安装与使用.md)，故障排查见 [`docs/故障排查.md`](docs/故障排查.md)，工具参数见 [`docs/API.md`](docs/API.md)。
@@ -69,17 +62,20 @@ npm test
 npm run check
 ```
 
-本地测试共 7 项，不要求运行 AutoCAD；它们不等于实时 AutoCAD 集成验证。插件源码构建示例：
+本地 MCP 测试共 7 项，不要求运行 AutoCAD；另有安装器兼容性测试覆盖 AutoCAD 系列映射、运行时识别与构建目标选择。两者均不等于实时 AutoCAD 宿主集成验证。插件按本机版本构建示例：
 
 ```powershell
-dotnet build .\plugin\AutoCadMcpPlugin.csproj -p:AutoCADDir="C:\Program Files\Autodesk\AutoCAD 2025"
+powershell -ExecutionPolicy Bypass -File .\scripts\Build-AutoCADPlugin.ps1 `
+  -CadYear 2025 -DotNetMajor 8 `
+  -AutoCADDir "C:\Program Files\Autodesk\AutoCAD 2025" `
+  -OutputDirectory "$env:TEMP\AutoCadMcpBuild"
 ```
 
 ### 路线图
 
-- 按 AutoCAD/运行时版本构建并实测插件包。
-- 安装 GUI：检测 AutoCAD、下载版本匹配的包、哈希校验、安装/配置客户端、命名管道连接状态、更新与回滚。
-- 支持 AutoCAD 2020+ 必须逐版本确认运行时和 API 兼容性，不能仅凭版本检测宣称支持。
+- 对 AutoCAD 2020–2026 各运行时组合完成实机加载与连接测试，并在兼容矩阵中记录结果。
+- 完善安装状态、更新与回滚界面。
+- 对新发布的 AutoCAD 主版本及时增加运行时/API 映射和对应测试。
 
 项目许可见 [`LICENSE`](LICENSE)；贡献流程见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
@@ -87,5 +83,5 @@ dotnet build .\plugin\AutoCadMcpPlugin.csproj -p:AutoCADDir="C:\Program Files\Au
 
 AutoCAD MCP Native Bridge connects a Node.js MCP server to an in-process .NET plug-in in AutoCAD through a local Windows named pipe. It supports drawing inspection and native editing operations for MCP clients.
 
-**Validated target: AutoCAD 2025 / R25.0 on Windows x64.** This release does not include verified plug-in builds for AutoCAD 2020–2024 or 2026. Do not load the 2025 DLL into other releases. See the Chinese installation guide and [`docs/API.md`](docs/API.md). Licensed under MIT.
+**Host integration verified so far: AutoCAD 2025 / R25.0 on Windows x64.** The installer compiles against the selected installation's API and runtime; other supported year/runtime combinations still require host load and pipe-connection tests. Do not manually load a prebuilt DLL into a different release. See the Chinese installation guide and [`docs/API.md`](docs/API.md). Licensed under MIT.
 

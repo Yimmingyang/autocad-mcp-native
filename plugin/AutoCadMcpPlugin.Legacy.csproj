@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework Condition="'$(CadYear)' == '2020'">net47</TargetFramework>
+    <TargetFramework Condition="'$(CadYear)' != '2020' and '$(CadYear)' != '2025' and '$(CadYear)' != '2026'">net48</TargetFramework>
+    <TargetFramework Condition="('$(CadYear)' == '2025' or '$(CadYear)' == '2026') and '$(DotNetMajor)' == '10'">net10.0-windows</TargetFramework>
+    <TargetFramework Condition="('$(CadYear)' == '2025' or '$(CadYear)' == '2026') and '$(DotNetMajor)' != '10'">net8.0-windows</TargetFramework>
+    <AssemblyName>AutoCadMcpPluginV2</AssemblyName>
+    <RootNamespace>AutoCadMcpPlugin</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <Version>0.5.5</Version>
+    <AssemblyVersion>0.5.5.0</AssemblyVersion>
+    <FileVersion>0.5.5.0</FileVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <DefineConstants>$(DefineConstants);CAD$(CadYear)</DefineConstants>
+    <AutoCADDir Condition="'$(AutoCADDir)' == ''">C:\Program Files\Autodesk\AutoCAD $(CadYear)</AutoCADDir>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(CadYear)' == '2020' or '$(CadYear)' == '2021' or '$(CadYear)' == '2022' or '$(CadYear)' == '2023' or '$(CadYear)' == '2024'">
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="AcCoreMgd"><HintPath>$(AutoCADDir)\accoremgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AcDbMgd"><HintPath>$(AutoCADDir)\acdbmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AcMgd"><HintPath>$(AutoCADDir)\acmgd.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

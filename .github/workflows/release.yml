@@ -1,0 +1,44 @@
+name: Release Windows installer
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: write
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm test
+      - run: npm run check
+      - run: dotnet run --project test/InstallerCompatibility.Tests.csproj -c Release
+      - run: dotnet publish installer/AutoCadMcpInstaller.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/installer
+      - name: Package source archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          git archive --format=zip --output=dist/autocad-mcp-source.zip HEAD
+      - name: Package MCP server
+        shell: pwsh
+        run: |
+          $server = Join-Path $env:RUNNER_TEMP 'autocad-mcp-server'
+          New-Item -ItemType Directory -Path (Join-Path $server 'src') -Force | Out-Null
+          Copy-Item package.json, package-lock.json, README.md, LICENSE -Destination $server
+          Copy-Item src\* -Destination (Join-Path $server 'src') -Recurse
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -Path (Join-Path $server '*') -DestinationPath dist/autocad-mcp-server.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/installer/AutoCadMcpInstaller.exe
+            dist/autocad-mcp-server.zip
+            dist/autocad-mcp-source.zip
+          generate_release_notes: true

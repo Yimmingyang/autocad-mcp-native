@@ -12,7 +12,7 @@ namespace AutoCadMcpInstaller;
 
 internal sealed record CadInstall(string Version, string ProductKey, string? Location, string? Build = null)
 {
-    public string Series => Version switch { "2020" => "R23.1", "2021" => "R24.0", "2022" => "R24.1", "2023" => "R24.2", "2024" => "R24.3", "2025" => "R25.0", "2026" => "R26.0", _ => "Unknown" };
+    public string Series => CadCompatibility.Series(Version);
 }
 
 internal sealed class MainForm : Form
@@ -23,7 +23,7 @@ internal sealed class MainForm : Form
     private readonly Button install = new() { Text = "安装/修复", Width = 110 };
     private readonly Button open = new() { Text = "打开 AutoCAD", Width = 110 };
     private readonly Button testConnection = new() { Text = "测试 MCP 连接", Width = 130 };
-    private readonly HttpClient http = new() { Timeout = TimeSpan.FromMinutes(4) };
+    private readonly HttpClient http = new() { Timeout = TimeSpan.FromMinutes(30) };
     private List<CadInstall> installations = [];
     private const string Repo = "https://api.github.com/repos/yanmiong/autocad-mcp-native";
 
@@ -42,18 +42,23 @@ internal sealed class MainForm : Form
 
     private void Detect()
     {
+        var selectedYear = Selected()?.Version;
         installations = FindInstallations(); list.Items.Clear();
         foreach (var cad in installations)
         {
             var supported = IsSupportedBuild(cad);
             var item = new ListViewItem($"AutoCAD {cad.Version} / {cad.Build ?? "build unknown"}"); item.SubItems.Add(cad.Series);
             var bundle = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Autodesk", "ApplicationPlugins", "AutoCadMcp.bundle", "PackageContents.xml");
-            item.SubItems.Add(supported ? (File.Exists(bundle) ? "已安装（启动 CAD 后检测连接）" : "可安装 MCP 0.5.2") : "尚无与此 CAD 构建匹配的插件包");
+            item.SubItems.Add(supported ? (IsBundleInstalledFor(cad, bundle) ? "该系列插件已安装（启动 CAD 后检测连接）" : "可按本机 API 构建并安装") : "缺少 AutoCAD API 或 .NET 运行时信息");
             item.Tag = cad; list.Items.Add(item);
         }
         if (installations.Count == 0) status.Text = "未发现 AutoCAD 2020–2026。安装 AutoCAD 后点“重新检测”。";
-        else status.Text = $"检测到 {installations.Count} 个 AutoCAD 安装。只开放实测构建；AutoCAD 2025 的 .NET 10 更新版（1.4+）及其他版本未开放安装，避免装入错误运行时插件。";
-        if (list.Items.Count > 0) list.Items[0].Selected = true;
+        else status.Text = $"检测到 {installations.Count} 个 AutoCAD 安装。安装时按本机 API/运行时编译插件；AutoCAD 2020–2026 中仅处理能识别 API 文件和运行时的版本。";
+        if (list.Items.Count > 0)
+        {
+            var item = list.Items.Cast<ListViewItem>().FirstOrDefault(x => (x.Tag as CadInstall)?.Version == selectedYear) ?? list.Items[0];
+            item.Selected = true;
+        }
     }
 
     private static List<CadInstall> FindInstallations()
@@ -130,9 +135,117 @@ internal sealed class MainForm : Form
         return found.Values.OrderByDescending(x => int.Parse(x.Version)).ToList();
     }
 
-    private static bool IsSupportedBuild(CadInstall cad) =>
-        cad.Version == "2025" && cad.Build is not null &&
-        (cad.Build.StartsWith("R25.0.", StringComparison.OrdinalIgnoreCase) || cad.Build.StartsWith("25.0.", StringComparison.Ordinal));
+    private static bool IsBundleInstalledFor(CadInstall cad, string bundle)
+    {
+        try
+        {
+            var manifest = XDocument.Load(Path.Combine(bundle, "PackageContents.xml"));
+            var requirements = manifest.Root?.Element("Components")?.Element("RuntimeRequirements");
+            return string.Equals(requirements?.Attribute("SeriesMin")?.Value, cad.Series, StringComparison.OrdinalIgnoreCase)
+                && File.Exists(Path.Combine(bundle, "Contents", "Windows", "AutoCadMcpPluginV2.dll"));
+        }
+        catch { return false; }
+    }
+
+    private static bool IsSupportedBuild(CadInstall cad) => CadCompatibility.IsSupported(cad.Version, cad.Location);
+
+    private async Task<(string Bundle, string Hash)> BuildForInstalledCad(CadInstall cad, string temp)
+    {
+        if (string.IsNullOrWhiteSpace(cad.Location)) throw new InvalidOperationException($"未找到 AutoCAD {cad.Version} 安装目录，无法匹配本机 API 编译。");
+        var year = int.Parse(cad.Version);
+        var dotnetMajor = year <= 2024 ? 8 : CadCompatibility.ReadRuntimeMajor(cad.Location ?? throw new InvalidOperationException("AutoCAD install path is missing.")) ?? throw new InvalidOperationException($"无法从 {cad.Location}\\acdbmgd.runtimeconfig.json 判断 AutoCAD {cad.Version} 的 .NET 运行时。");
+        var sdk = await EnsureDotNetSdk(dotnetMajor);
+        status.Text = $"正在获取 MCP 源码并针对 AutoCAD {cad.Version} 编译...";
+        var releaseJson = await http.GetStringAsync(Repo + "/releases/latest");
+        using var release = JsonDocument.Parse(releaseJson);
+        var tag = release.RootElement.GetProperty("tag_name").GetString() ?? throw new InvalidDataException("GitHub Release 缺少 tag_name。");
+        var sourceZip = Path.Combine(temp, "source.zip");
+        var sourceAsset = release.RootElement.GetProperty("assets").EnumerateArray().FirstOrDefault(x => x.GetProperty("name").GetString() == "autocad-mcp-source.zip");
+        if (sourceAsset.ValueKind == JsonValueKind.Undefined) throw new InvalidDataException($"Release {tag} 缺少校验过的 autocad-mcp-source.zip，未构建。");
+        await File.WriteAllBytesAsync(sourceZip, await http.GetByteArrayAsync(sourceAsset.GetProperty("browser_download_url").GetString()!));
+        var sourceHash = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(sourceZip))).ToLowerInvariant();
+        var expectedSourceHash = sourceAsset.GetProperty("digest").GetString()?.Replace("sha256:", "", StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(expectedSourceHash) || !sourceHash.Equals(expectedSourceHash, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("源码包缺少 GitHub SHA-256 digest 或校验失败，未构建。");
+        var sourceRoot = Path.Combine(temp, "source"); Directory.CreateDirectory(sourceRoot); ZipFile.ExtractToDirectory(sourceZip, sourceRoot);
+        var project = Directory.GetFiles(sourceRoot, "AutoCadMcpPlugin.Legacy.csproj", SearchOption.AllDirectories).FirstOrDefault()
+            ?? throw new InvalidDataException($"Release {tag} 未包含多版本插件构建工程；请先发布包含 Legacy.csproj 的源码版本。");
+        var repoRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(project)!, ".."));
+        var buildOutput = Path.Combine(temp, "compiled");
+        var args = new[] { "build", project, "-c", "Release", $"-p:CadYear={cad.Version}", $"-p:AutoCADDir={cad.Location}", $"-p:DotNetMajor={dotnetMajor}", "-o", buildOutput, "--nologo", "--verbosity", "quiet" };
+        var result = await RunCommand(sdk, args, repoRoot);
+        if (result.ExitCode != 0) throw new InvalidOperationException($"AutoCAD {cad.Version} 插件构建失败（{result.ExitCode}）：{result.Output}");
+
+        var bundle = Path.Combine(temp, "generated", "AutoCadMcp.bundle");
+        var payload = Path.Combine(bundle, "Contents", "Windows"); Directory.CreateDirectory(payload);
+        foreach (var file in Directory.GetFiles(buildOutput).Where(x => !x.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase)))
+            File.Copy(file, Path.Combine(payload, Path.GetFileName(file)), true);
+        var series = cad.Series;
+        var manifest = new XDocument(new XElement("ApplicationPackage",
+            new XAttribute("SchemaVersion", "1.0"), new XAttribute("AutodeskProduct", "AutoCAD"),
+            new XAttribute("Name", $"AutoCAD MCP {cad.Version}"), new XAttribute("AppVersion", tag.TrimStart('v')),
+            new XAttribute("ProductCode", "{" + Guid.NewGuid().ToString() + "}"),
+            new XAttribute("UpgradeCode", "{7B20D7B7-18F7-4B77-A17D-AED95E33C105}"),
+            new XElement("CompanyDetails", new XAttribute("Name", "AutoCAD MCP Native")),
+            new XElement("Components",
+                new XElement("RuntimeRequirements", new XAttribute("OS", "Win64"), new XAttribute("Platform", "AutoCAD*"), new XAttribute("SeriesMin", series), new XAttribute("SeriesMax", series)),
+                new XElement("ComponentEntry", new XAttribute("AppName", "AutoCadMcpPluginV2"), new XAttribute("ModuleName", "./Contents/Windows/AutoCadMcpPluginV2.dll"), new XAttribute("AppType", ".Net"), new XAttribute("LoadOnAutoCADStartup", "True")))));
+        manifest.Save(Path.Combine(bundle, "PackageContents.xml"));
+        var plugin = Path.Combine(payload, "AutoCadMcpPluginV2.dll");
+        if (!File.Exists(plugin)) throw new InvalidDataException("构建成功但输出目录缺少 AutoCadMcpPluginV2.dll。");
+        await using var stream = File.OpenRead(plugin);
+        var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream)).ToLowerInvariant();
+        return (bundle, hash);
+    }
+
+    private async Task<string> EnsureDotNetSdk(int major)
+    {
+        var sdkRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoCadMcp", "runtime", $"dotnet-sdk-{major}");
+        var dotnetPath = Path.Combine(sdkRoot, "dotnet.exe");
+        if (File.Exists(dotnetPath))
+        {
+            var listed = await RunCapture(dotnetPath, "--list-sdks", Environment.CurrentDirectory);
+            if (listed.Split('\n').Any(x => x.TrimStart().StartsWith(major + ".", StringComparison.Ordinal))) return dotnetPath;
+        }
+        var pathDotnet = FindOnPath("dotnet.exe");
+        if (pathDotnet is not null)
+        {
+            var listed = await RunCapture(pathDotnet, "--list-sdks", Environment.CurrentDirectory);
+            if (listed.Split('\n').Any(x => x.TrimStart().StartsWith(major + ".", StringComparison.Ordinal))) return pathDotnet;
+        }
+
+        status.Text = $"未检测到 .NET {major} SDK，正在从 Microsoft 官方发行清单下载并校验便携 SDK...";
+        using var metadata = JsonDocument.Parse(await http.GetStringAsync($"https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/{major}.0/releases.json"));
+        var root = metadata.RootElement;
+        var latest = root.GetProperty("latest-sdk").GetString() ?? throw new InvalidDataException("Microsoft .NET 发布清单没有 latest-sdk。");
+        var release = root.GetProperty("releases").EnumerateArray().FirstOrDefault(x => x.TryGetProperty("sdk", out var sdk) && sdk.TryGetProperty("version", out var version) && version.GetString() == latest);
+        if (release.ValueKind == JsonValueKind.Undefined) throw new InvalidDataException("Microsoft .NET 发布清单中找不到最新 SDK 条目。");
+        var package = release.GetProperty("sdk").GetProperty("files").EnumerateArray().FirstOrDefault(x => x.GetProperty("rid").GetString() == "win-x64" && x.GetProperty("name").GetString() == "dotnet-sdk-win-x64.zip");
+        if (package.ValueKind == JsonValueKind.Undefined) throw new InvalidDataException("Microsoft .NET 发布清单中找不到 win-x64 SDK 压缩包。");
+        var zip = Path.Combine(Path.GetTempPath(), $"dotnet-sdk-{latest}-win-x64.zip");
+        await using (var input = await http.GetStreamAsync(package.GetProperty("url").GetString()!))
+        await using (var output = File.Create(zip)) await input.CopyToAsync(output);
+        await using (var verify = File.OpenRead(zip))
+        {
+            var actual = Convert.ToHexString(await SHA512.HashDataAsync(verify)).ToLowerInvariant();
+            var expected = package.GetProperty("hash").GetString();
+            if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Microsoft .NET SDK SHA-512 校验失败，未提取。");
+        }
+        var stage = sdkRoot + ".stage-" + Guid.NewGuid().ToString("N"); Directory.CreateDirectory(stage); ZipFile.ExtractToDirectory(zip, stage);
+        if (!File.Exists(Path.Combine(stage, "dotnet.exe"))) throw new InvalidDataException(".NET SDK 压缩包结构不完整。");
+        var backup = sdkRoot + ".backup-" + DateTime.Now.ToString("yyyyMMddHHmmss");
+        if (Directory.Exists(sdkRoot)) Directory.Move(sdkRoot, backup);
+        try { Directory.Move(stage, sdkRoot); } catch { if (Directory.Exists(backup)) Directory.Move(backup, sdkRoot); throw; }
+        return dotnetPath;
+    }
+
+    private static async Task<(int ExitCode, string Output)> RunCommand(string exe, IEnumerable<string> arguments, string cwd)
+    {
+        var p = new Process { StartInfo = new ProcessStartInfo(exe) { WorkingDirectory = cwd, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true } };
+        foreach (var argument in arguments) p.StartInfo.ArgumentList.Add(argument);
+        p.Start(); var stdout = p.StandardOutput.ReadToEndAsync(); var stderr = p.StandardError.ReadToEndAsync(); await p.WaitForExitAsync();
+        return (p.ExitCode, (await stdout) + (await stderr));
+    }
 
     private static string? ParseCadYear(string value)
     {
@@ -140,11 +253,7 @@ internal sealed class MainForm : Form
         return match.Success ? match.Value : null;
     }
 
-    private static string? YearFromSeries(string value) => value.ToUpperInvariant() switch
-    {
-        "R23.1" => "2020", "R24.0" => "2021", "R24.1" => "2022", "R24.2" => "2023",
-        "R24.3" => "2024", "R25.0" => "2025", "R26.0" => "2026", _ => null
-    };
+    private static string? YearFromSeries(string value) => CadCompatibility.YearFromSeries(value);
 
     private static string? FindConventionalLocation(string year)
     {
@@ -170,24 +279,15 @@ internal sealed class MainForm : Form
     private async Task InstallSelected()
     {
         var cad = Selected(); if (cad is null) { status.Text = "先选择一个 AutoCAD 版本。"; return; }
-        if (!IsSupportedBuild(cad)) { status.Text = $"AutoCAD {cad.Version}（{cad.Series}, build {cad.Build ?? "unknown"}）已检测到，但没有该构建匹配且已验证的 .NET/API 插件。本安装器已阻止安装。"; return; }
+        if (!IsSupportedBuild(cad)) { status.Text = $"AutoCAD {cad.Version}（{cad.Series}, build {cad.Build ?? "unknown"}）已检测到，但缺少本机 API 文件或无法识别 .NET 运行时，暂未开始安装。"; return; }
         if (Process.GetProcessesByName("acad").Length > 0) { status.Text = "请先保存并退出 AutoCAD，再重试安装。"; return; }
         install.Enabled = false;
         var pluginInstalled = false;
         try
         {
-            status.Text = "正在从 GitHub 获取最新发行包...";
-            using var release = await http.GetStreamAsync(Repo + "/releases/latest"); using var doc = await JsonDocument.ParseAsync(release);
-            var assets = doc.RootElement.GetProperty("assets").EnumerateArray();
-            var asset = assets.FirstOrDefault(a => a.GetProperty("name").GetString() == "autocad-mcp-r25.0.zip");
-            if (asset.ValueKind == JsonValueKind.Undefined) throw new InvalidOperationException("GitHub Release 中没有 autocad-mcp-r25.0.zip 安装资产。待维护者发布安装包后即可使用此安装功能。");
             var temp = Path.Combine(Path.GetTempPath(), "autocad-mcp-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(temp);
-            var zip = Path.Combine(temp, "bundle.zip"); await File.WriteAllBytesAsync(zip, await http.GetByteArrayAsync(asset.GetProperty("browser_download_url").GetString()!));
-            var hash = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(zip))).ToLowerInvariant();
-            var expected = asset.GetProperty("digest").GetString()?.Replace("sha256:", "", StringComparison.OrdinalIgnoreCase);
-            if (!string.IsNullOrEmpty(expected) && !hash.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("下载文件 SHA-256 校验失败，未安装。");
-            ZipFile.ExtractToDirectory(zip, temp);
-            var bundle = Directory.GetDirectories(temp, "AutoCadMcp.bundle", SearchOption.AllDirectories).FirstOrDefault() ?? throw new InvalidDataException("安装包内找不到 AutoCadMcp.bundle。");
+            status.Text = $"正在为 AutoCAD {cad.Version} 获取源码和构建工具，并针对本机 API 编译插件...";
+            var (bundle, hash) = await BuildForInstalledCad(cad, temp);
             var manifestPath = Path.Combine(bundle, "PackageContents.xml");
             var xml = XDocument.Load(manifestPath);
             var minSeries = xml.Root?.Element("Components")?.Element("RuntimeRequirements")?.Attribute("SeriesMin")?.Value;
@@ -200,7 +300,7 @@ internal sealed class MainForm : Form
             CopyDirectory(bundle, stage); if (Directory.Exists(target)) Directory.Move(target, backup);
             try { Directory.Move(stage, target); } catch { if (Directory.Exists(backup)) Directory.Move(backup, target); throw; }
             pluginInstalled = true;
-            var mcp = await InstallMcpServerAndConfigureClient();
+            var mcp = await InstallMcpServerAndConfigureClient(cad.Version);
             Detect();
             status.Text = $"AutoCAD 插件已安装（SHA-256 {hash[..12]}…）。{mcp} 启动/重启 AutoCAD 后点“测试 MCP 连接”。";
         }
@@ -208,7 +308,7 @@ internal sealed class MainForm : Form
         finally { install.Enabled = true; }
     }
 
-    private async Task<string> InstallMcpServerAndConfigureClient()
+    private async Task<string> InstallMcpServerAndConfigureClient(string cadYear)
     {
         status.Text = "正在检查 Node.js 运行时...";
         var (node, npm, version) = await EnsureNodeRuntime();
@@ -238,7 +338,8 @@ internal sealed class MainForm : Form
         var config = File.Exists(configPath) ? File.ReadAllText(configPath) : "";
         var escapedNode = node.Replace("\\", "\\\\", StringComparison.Ordinal);
         var escapedEntry = Path.Combine(installRoot, "src", "index.js").Replace("\\", "\\\\", StringComparison.Ordinal);
-        var block = $"[mcp_servers.autocad_native]{Environment.NewLine}command = \"{escapedNode}\"{Environment.NewLine}args = [\"{escapedEntry}\"]{Environment.NewLine}startup_timeout_sec = 30{Environment.NewLine}tool_timeout_sec = 180{Environment.NewLine}";
+        var pipeName = $@"\\.\pipe\AutoCAD_MCP_{cadYear}_V2".Replace("\\", "\\\\", StringComparison.Ordinal);
+        var block = $"[mcp_servers.autocad_native]{Environment.NewLine}command = \"{escapedNode}\"{Environment.NewLine}args = [\"{escapedEntry}\"]{Environment.NewLine}env = {{ AUTOCAD_MCP_PIPE = \"{pipeName}\" }}{Environment.NewLine}startup_timeout_sec = 30{Environment.NewLine}tool_timeout_sec = 180{Environment.NewLine}";
         var section = new System.Text.RegularExpressions.Regex(@"(?ms)^\[mcp_servers\.autocad_native\]\r?\n.*?(?=^\[|\z)");
         config = section.IsMatch(config) ? section.Replace(config, block) : config.TrimEnd() + Environment.NewLine + Environment.NewLine + block;
         if (File.Exists(configPath)) File.Copy(configPath, configPath + ".backup-" + DateTime.Now.ToString("yyyyMMddHHmmss"));
@@ -312,7 +413,9 @@ internal sealed class MainForm : Form
         status.Text = "正在连接 AutoCAD 本机命名管道..."; testConnection.Enabled = false;
         try
         {
-            using var pipe = new NamedPipeClientStream(".", "AutoCAD_MCP_2025_V2", PipeDirection.InOut, PipeOptions.Asynchronous);
+            var cad = Selected();
+            if (cad is null) throw new InvalidOperationException("先选择 AutoCAD 版本。");
+            using var pipe = new NamedPipeClientStream(".", $"AutoCAD_MCP_{cad.Version}_V2", PipeDirection.InOut, PipeOptions.Asynchronous);
             await pipe.ConnectAsync(2500);
             using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 1024, leaveOpen: true) { AutoFlush = true };
             using var reader = new StreamReader(pipe, Encoding.UTF8, false, 1024, leaveOpen: true);
@@ -322,7 +425,7 @@ internal sealed class MainForm : Form
             if (!json.RootElement.TryGetProperty("ok", out var ok) || !ok.GetBoolean()) throw new IOException(response);
             status.Text = "连接成功：AutoCAD 原生插件已响应 get_bridge_status。";
         }
-        catch (Exception e) { status.Text = "尚未连通：" + e.Message + "。请打开 AutoCAD 2025，并重启 Codex 后重试。"; }
+        catch (Exception e) { status.Text = "尚未连通：" + e.Message + "。请打开所选 AutoCAD 版本，并重启 Codex 后重试。"; }
         finally { testConnection.Enabled = true; }
     }
 

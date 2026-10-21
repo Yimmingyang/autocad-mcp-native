@@ -1,4 +1,5 @@
-﻿using System.IO.Pipes;
+using System.IO.Pipes;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Autodesk.AutoCAD.ApplicationServices;
@@ -12,13 +13,27 @@ using Autodesk.AutoCAD.Runtime;
 namespace AutoCadMcpPlugin;
 
 /// <summary>
-/// AutoCAD 2025 in-process MCP bridge (v0.5.0).
+/// AutoCAD 2025 in-process MCP bridge (v0.5.5).
 /// One named pipe, many native operations, self-describing registry.
 /// </summary>
 public sealed class Entry : IExtensionApplication
 {
+#if CAD2020
+    private const string PipeName = "AutoCAD_MCP_2020_V2";
+#elif CAD2021
+    private const string PipeName = "AutoCAD_MCP_2021_V2";
+#elif CAD2022
+    private const string PipeName = "AutoCAD_MCP_2022_V2";
+#elif CAD2023
+    private const string PipeName = "AutoCAD_MCP_2023_V2";
+#elif CAD2024
+    private const string PipeName = "AutoCAD_MCP_2024_V2";
+#elif CAD2026
+    private const string PipeName = "AutoCAD_MCP_2026_V2";
+#else
     private const string PipeName = "AutoCAD_MCP_2025_V2";
-    private const string Version = "0.5.0";
+#endif
+    private const string Version = "0.5.5";
     private const int PipeInstances = 4;
     private const double CoordinateLimit = 1e7;
 
@@ -117,16 +132,16 @@ public sealed class Entry : IExtensionApplication
         {
             try
             {
-                await using var pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, PipeInstances,
-                    PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                using var pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, PipeInstances,
+                    PipeTransmissionMode.Byte, ServerPipeOptions);
                 await pipe.WaitForConnectionAsync(token);
                 using var reader = new StreamReader(pipe, System.Text.Encoding.UTF8, false, 4096, true);
                 using var writer = new StreamWriter(pipe, new System.Text.UTF8Encoding(false), 4096, true) { AutoFlush = true };
-                var line = await reader.ReadLineAsync(token);
+                var line = await reader.ReadLineAsync().WaitAsync(token);
                 if (line is null) continue;
                 var response = await HandleRequestAsync(line);
                 await writer.WriteLineAsync(response);
-                await writer.FlushAsync(token);
+                await writer.FlushAsync();
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
             catch (System.Exception ex)
@@ -137,6 +152,12 @@ public sealed class Entry : IExtensionApplication
             }
         }
     }
+
+#if NET6_0_OR_GREATER
+    private const PipeOptions ServerPipeOptions = PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly;
+#else
+    private const PipeOptions ServerPipeOptions = PipeOptions.Asynchronous;
+#endif
 
     // ---------------------------------------------------------------- dispatch
 
@@ -207,7 +228,17 @@ public sealed class Entry : IExtensionApplication
 
     // ------------------------------------------------------------ op registry
 
-    private sealed record Op(string Name, string Description, string Params, bool Mutates, Func<JsonElement, object> Run, bool OutsideContext = false);
+    private sealed class Op
+    {
+        public string Name { get; }
+        public string Description { get; }
+        public string Params { get; }
+        public bool Mutates { get; }
+        public Func<JsonElement, object> Run { get; }
+        public bool OutsideContext { get; }
+        public Op(string name, string description, string parameters, bool mutates, Func<JsonElement, object> run, bool outsideContext = false)
+        { Name = name; Description = description; Params = parameters; Mutates = mutates; Run = run; OutsideContext = outsideContext; }
+    }
 
     private static readonly Dictionary<string, Op> Ops = BuildRegistry();
 
@@ -320,10 +351,12 @@ public sealed class Entry : IExtensionApplication
             throw new ArgumentException($"Missing required number: {name}");
         }
         var v = e.GetDouble();
-        if (!double.IsFinite(v) || Math.Abs(v) > CoordinateLimit)
+        if (double.IsNaN(v) || double.IsInfinity(v) || Math.Abs(v) > CoordinateLimit)
             throw new ArgumentOutOfRangeException(name, $"{name} must be finite and within ±{CoordinateLimit} drawing units.");
         return v;
     }
+
+    private static int ClampInt(int value, int min, int max) => value < min ? min : value > max ? max : value;
 
     private static int Int(JsonElement a, string name, int fallback) =>
         a.TryGetProperty(name, out var e) ? e.GetInt32() : fallback;
@@ -422,7 +455,7 @@ public sealed class Entry : IExtensionApplication
             version = Version,
             pipe = @"\\.\pipe\" + PipeName,
             acadVersion = Application.Version.ToString(),
-            processId = Environment.ProcessId,
+            processId = Process.GetCurrentProcess().Id,
             documentCount = Application.DocumentManager.Count,
             drawing = doc is null ? null : Path.GetFileName(doc.Name),
             path = doc?.Name,
@@ -550,7 +583,7 @@ public sealed class Entry : IExtensionApplication
 
     private static object UndoRedo(JsonElement a, bool undo)
     {
-        var count = Math.Clamp(Int(a, "count", 1), 1, 20);
+        var count = ClampInt(Int(a, "count", 1), 1, 20);
         var editor = Doc().Editor;
         for (var i = 0; i < count; i++) editor.Command(undo ? "_U" : "_REDO");
         return new { operation = undo ? "undo" : "redo", count };
@@ -695,7 +728,7 @@ public sealed class Entry : IExtensionApplication
         var table = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForWrite);
         if (table.Has(name)) throw new ArgumentException($"Layer already exists: {name}");
         var rec = new LayerTableRecord { Name = name };
-        if (a.TryGetProperty("colorIndex", out var ci)) rec.Color = Color.FromColorIndex(ColorMethod.ByAci, (short)Math.Clamp(ci.GetInt32(), 1, 255));
+        if (a.TryGetProperty("colorIndex", out var ci)) rec.Color = Color.FromColorIndex(ColorMethod.ByAci, (short)ClampInt(ci.GetInt32(), 1, 255));
         var lt = OptStr(a, "linetype");
         if (!string.IsNullOrEmpty(lt))
         {
@@ -722,7 +755,7 @@ public sealed class Entry : IExtensionApplication
         if (a.TryGetProperty("frozen", out var frz)) rec.IsFrozen = frz.GetBoolean();
         if (a.TryGetProperty("locked", out var lck)) rec.IsLocked = lck.GetBoolean();
         if (a.TryGetProperty("plottable", out var plt)) rec.IsPlottable = plt.GetBoolean();
-        if (a.TryGetProperty("colorIndex", out var ci)) rec.Color = Color.FromColorIndex(ColorMethod.ByAci, (short)Math.Clamp(ci.GetInt32(), 1, 255));
+        if (a.TryGetProperty("colorIndex", out var ci)) rec.Color = Color.FromColorIndex(ColorMethod.ByAci, (short)ClampInt(ci.GetInt32(), 1, 255));
         var lt = OptStr(a, "linetype");
         if (!string.IsNullOrEmpty(lt))
         {
@@ -758,7 +791,7 @@ public sealed class Entry : IExtensionApplication
 
     private static object CountEntities(JsonElement a)
     {
-        var limit = Math.Clamp(Int(a, "limit", 5000), 1, 20000);
+        var limit = ClampInt(Int(a, "limit", 5000), 1, 20000);
         var db = Db();
         using var tr = db.TransactionManager.StartOpenCloseTransaction();
         var ms = (BlockTableRecord)tr.GetObject(ModelSpace(tr, db), OpenMode.ForRead);
@@ -775,7 +808,7 @@ public sealed class Entry : IExtensionApplication
 
     private static object ListEntities(JsonElement a)
     {
-        var limit = Math.Clamp(Int(a, "limit", 1000), 1, 5000);
+        var limit = ClampInt(Int(a, "limit", 1000), 1, 5000);
         var typeFilter = OptStr(a, "type")?.ToUpperInvariant();
         var layerFilter = OptStr(a, "layer");
         var db = Db();
@@ -796,7 +829,7 @@ public sealed class Entry : IExtensionApplication
 
     private static object SelectEntities(JsonElement a)
     {
-        var limit = Math.Clamp(Int(a, "limit", 2000), 1, 5000);
+        var limit = ClampInt(Int(a, "limit", 2000), 1, 5000);
         var typeFilter = OptStr(a, "type")?.ToUpperInvariant();
         var layerFilter = OptStr(a, "layer");
         var textFilter = OptStr(a, "text");
@@ -816,7 +849,7 @@ public sealed class Entry : IExtensionApplication
             if (textFilter is not null)
             {
                 var t = e switch { DBText dt => dt.TextString, MText mt => mt.Contents, _ => null };
-                if (t is null || !t.Contains(textFilter, StringComparison.OrdinalIgnoreCase)) continue;
+                if (t is null || t.IndexOf(textFilter, StringComparison.OrdinalIgnoreCase) < 0) continue;
             }
             list.Add(new { handle = e.Handle.ToString(), type = dxf, layer = e.Layer });
         }
@@ -884,7 +917,7 @@ public sealed class Entry : IExtensionApplication
 
     private static object Inspect(JsonElement a)
     {
-        var limit = Math.Clamp(Int(a, "limit", 2000), 1, 20000);
+        var limit = ClampInt(Int(a, "limit", 2000), 1, 20000);
         var includeSplines = Bool(a, "includeSplines", false);
         var db = Db();
         using var tr = db.TransactionManager.StartOpenCloseTransaction();
@@ -1120,7 +1153,7 @@ public sealed class Entry : IExtensionApplication
         hatch.PatternScale = Num(a, "scale", 1);
         hatch.PatternAngle = Num(a, "angle", 0) * Math.PI / 180.0;
         if (a.TryGetProperty("colorIndex", out var ci))
-            hatch.Color = Color.FromColorIndex(ColorMethod.ByAci, (short)Math.Clamp(ci.GetInt32(), 1, 255));
+            hatch.Color = Color.FromColorIndex(ColorMethod.ByAci, (short)ClampInt(ci.GetInt32(), 1, 255));
 
         var handle = OptStr(a, "handle");
         if (string.IsNullOrEmpty(handle))
@@ -1238,8 +1271,8 @@ public sealed class Entry : IExtensionApplication
     {
         var doc = Doc(); var db = doc.Database;
         var handle = Str(a, "handle");
-        var rows = Math.Clamp(Int(a, "rows", 1), 1, 100);
-        var cols = Math.Clamp(Int(a, "cols", 1), 1, 100);
+        var rows = ClampInt(Int(a, "rows", 1), 1, 100);
+        var cols = ClampInt(Int(a, "cols", 1), 1, 100);
         var rs = Num(a, "rowSpacing", 0);
         var cs = Num(a, "colSpacing", 0);
         using var tr = db.TransactionManager.StartTransaction();
@@ -1274,13 +1307,13 @@ public sealed class Entry : IExtensionApplication
         if (forceLayerOnly is null)
         {
             if (a.TryGetProperty("colorIndex", out var ci))
-                e.Color = Color.FromColorIndex(ColorMethod.ByAci, (short)Math.Clamp(ci.GetInt32(), 0, 256));
+                e.Color = Color.FromColorIndex(ColorMethod.ByAci, (short)ClampInt(ci.GetInt32(), 0, 256));
             var trueColor = OptStr(a, "trueColor");
             if (trueColor is not null)
             {
                 var hex = trueColor.TrimStart('#');
                 if (hex.Length != 6) throw new ArgumentException("trueColor must be RRGGBB.");
-                e.Color = Color.FromRgb(Convert.ToByte(hex[..2], 16), Convert.ToByte(hex[2..4], 16), Convert.ToByte(hex[4..], 16));
+                e.Color = Color.FromRgb(Convert.ToByte(hex.Substring(0, 2), 16), Convert.ToByte(hex.Substring(2, 2), 16), Convert.ToByte(hex.Substring(4, 2), 16));
             }
             var linetype = OptStr(a, "linetype");
             if (linetype is not null) e.Linetype = linetype;
@@ -1787,7 +1820,7 @@ public sealed class Entry : IExtensionApplication
                     var layers = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForWrite);
                     if (layers.Has(name)) { created.Add(new { type = "layer", name, existing = true }); break; }
                     var rec = new LayerTableRecord { Name = name };
-                    if (op.TryGetProperty("colorIndex", out var ci)) rec.Color = Color.FromColorIndex(ColorMethod.ByAci, (short)Math.Clamp(ci.GetInt32(), 1, 255));
+                    if (op.TryGetProperty("colorIndex", out var ci)) rec.Color = Color.FromColorIndex(ColorMethod.ByAci, (short)ClampInt(ci.GetInt32(), 1, 255));
                     layers.Add(rec);
                     tr.AddNewlyCreatedDBObject(rec, true);
                     created.Add(new { type = "layer", name });
@@ -1823,6 +1856,23 @@ public sealed class Entry : IExtensionApplication
         Plans.Remove(planId);
         PlanCreated.Remove(planId);
         return new { applied = created.Count, created };
+    }
+}
+
+internal static class TaskCompatibilityExtensions
+{
+    public static async Task<T> WaitAsync<T>(this Task<T> task, CancellationToken token)
+    {
+        var completed = await Task.WhenAny(task, Task.Delay(Timeout.Infinite, token));
+        if (completed != task) token.ThrowIfCancellationRequested();
+        return await task;
+    }
+
+    public static async Task<T> WaitAsync<T>(this Task<T> task, TimeSpan timeout)
+    {
+        var completed = await Task.WhenAny(task, Task.Delay(timeout));
+        if (completed != task) throw new TimeoutException("The operation exceeded its allowed time.");
+        return await task;
     }
 }
 
