@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0" AutodeskProduct="AutoCAD" Name="AutoCAD MCP 2025" AppVersion="0.5.0" ProductCode="{F89E6F24-7CB8-4B3F-A084-8227EA9BDA65}" UpgradeCode="{7B20D7B7-18F7-4B77-A17D-AED95E33C105}">
+  <CompanyDetails Name="Local AutoCAD MCP" />
+  <Components>
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" />
+    <ComponentEntry AppName="AutoCadMcpPluginV2" ModuleName="./Contents/Windows/AutoCadMcpPluginV2.dll" AppType=".Net" LoadOnAutoCADStartup="True" />
+  </Components>
+</ApplicationPackage>
+

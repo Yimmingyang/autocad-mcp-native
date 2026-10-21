@@ -1,0 +1,15 @@
+node_modules/
+**/bin/
+**/obj/
+*.user
+*.suo
+.env
+.env.*
+!.env.example
+config.toml
+*.bak
+*.sv$
+*.log
+*.dwg
+*.dxf
+.tools/

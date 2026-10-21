@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Installation and troubleshooting
+    url: https://github.com/yanmiong/autocad-mcp-native/blob/main/docs/安装与使用.md
+    about: Read the installation and troubleshooting guides before opening an issue.
