@@ -1,54 +1,69 @@
-name: Release Windows installer
+name: Windows installer release
+
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'
+  workflow_dispatch:
+
 permissions:
   contents: write
+
 jobs:
-  windows-release:
+  package-and-release:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci
-      - run: npm test
-      - run: npm run check
-      - run: dotnet run --project test/InstallerCompatibility.Tests.csproj -c Release
-      - run: dotnet publish installer/AutoCadMcpInstaller.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/installer
-      - name: Package source archive
+
+      - name: Run release checks
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path dist -Force | Out-Null
-          git archive --format=zip --output=dist/autocad-mcp-source.zip HEAD
-      - name: Package MCP server
+          npm ci
+          npm test
+          npm run check
+          dotnet run --project test/InstallerCompatibility.Tests.csproj -c Release
+
+      - name: Publish self-contained single-file installer
         shell: pwsh
         run: |
-          $server = Join-Path $env:RUNNER_TEMP 'autocad-mcp-server'
-          New-Item -ItemType Directory -Path (Join-Path $server 'src') -Force | Out-Null
-          Copy-Item package.json, package-lock.json, README.md, LICENSE -Destination $server
-          Copy-Item src\* -Destination (Join-Path $server 'src') -Recurse
-          New-Item -ItemType Directory -Path dist -Force | Out-Null
-          Compress-Archive -Path (Join-Path $server '*') -DestinationPath dist/autocad-mcp-server.zip
-      - name: Write SHA-256 sidecars
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          dotnet publish installer/AutoCadMcpInstaller.csproj -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$version `
+            -o dist/installer
+          if (!(Test-Path dist/installer/AutoCadMcpInstaller.exe)) { throw 'Installer executable was not produced.' }
+          New-Item -ItemType Directory -Path dist/release -Force | Out-Null
+          Copy-Item dist/installer/AutoCadMcpInstaller.exe dist/release/AutoCadMcpInstaller.exe
+
+      - name: Package installer source and MCP service
         shell: pwsh
         run: |
-          Get-ChildItem dist -File -Recurse | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            [IO.File]::WriteAllText($_.FullName + '.sha256', $hash, [Text.Encoding]::ASCII)
+          git archive --format=zip --output=dist/release/autocad-mcp-source.zip HEAD
+          Compress-Archive -Path package.json,package-lock.json,src -DestinationPath dist/release/autocad-mcp-server.zip -CompressionLevel Optimal
+          foreach ($file in Get-ChildItem dist/release -File) {
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)" | Set-Content -LiteralPath ($file.FullName + '.sha256') -Encoding ascii
           }
-      - uses: softprops/action-gh-release@v2
+
+      - name: Publish GitHub Release assets
+        uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/installer/AutoCadMcpInstaller.exe
-            dist/installer/AutoCadMcpInstaller.exe.sha256
-            dist/autocad-mcp-server.zip
-            dist/autocad-mcp-server.zip.sha256
-            dist/autocad-mcp-source.zip
-            dist/autocad-mcp-source.zip.sha256
+          name: AutoCAD MCP ${{ github.ref_name }}
           generate_release_notes: true
+          files: |
+            dist/release/AutoCadMcpInstaller.exe
+            dist/release/AutoCadMcpInstaller.exe.sha256
+            dist/release/autocad-mcp-source.zip
+            dist/release/autocad-mcp-source.zip.sha256
+            dist/release/autocad-mcp-server.zip
+            dist/release/autocad-mcp-server.zip.sha256

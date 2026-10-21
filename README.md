@@ -13,7 +13,9 @@
 
 仓库提供 `installer/` WinForms 连接器：扫描 AutoCAD 2020–2027 并显示构建号；扫描并支持 OpenAI Codex、DeepSeek Harness 两种 MCP 客户端；安装时依据所选 AutoCAD 的本机 API 和运行时编译插件，部署便携 Node.js/MCP 服务，并写入所选 AI 客户端配置。状态检测分开报告 AutoCAD 插件握手、MCP `tools/list` 工具发现和 AI 客户端配置。AutoCAD 2020 使用 .NET Framework 4.7、2021–2024 使用 .NET Framework 4.8；2025/2026 按本机运行时选 .NET 8 或 10，2027 使用 .NET 10。AutoCAD 2027 对应 R26.0。
 
-构建安装器：使用 Windows .NET 8 SDK 运行 `dotnet publish installer/AutoCadMcpInstaller.csproj -c Release -o installer/publish`。单文件输出为 `installer/publish/AutoCadMcpInstaller.exe`。
+**普通用户不用下载源码或安装开发工具。**从 [GitHub Releases 最新版本](https://github.com/Yimmingyang/autocad-mcp-native/releases/latest) 下载 `AutoCadMcpInstaller.exe` 并运行。发行流水线会自动构建 Windows x64 自包含单文件安装器，同时附带按安装器约定命名并提供 SHA-256 校验文件的 MCP 源码包和服务包。启动器检测本机 AutoCAD 版本与受支持的 AI 客户端；选择版本/客户端后点“安装/修复”，它会下载对应源码和运行时、按本机 AutoCAD API 编译插件、安装 MCP 服务并写入配置。安装后打开 AutoCAD，再点“测试 MCP 连接”，并在 AI 客户端重启/新会话后确认工具可见。
+
+源码开发者可使用 Windows .NET 8 SDK 运行 `dotnet publish installer/AutoCadMcpInstaller.csproj -c Release -o installer/publish`，输出 `installer/publish/AutoCadMcpInstaller.exe`。
 
 ### 功能
 
