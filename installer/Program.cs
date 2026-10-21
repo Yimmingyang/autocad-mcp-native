@@ -131,7 +131,8 @@ internal sealed class MainForm : Form
     }
 
     private static bool IsSupportedBuild(CadInstall cad) =>
-        cad.Version == "2025" && cad.Build is not null && cad.Build.StartsWith("25.0.", StringComparison.Ordinal);
+        cad.Version == "2025" && cad.Build is not null &&
+        (cad.Build.StartsWith("R25.0.", StringComparison.OrdinalIgnoreCase) || cad.Build.StartsWith("25.0.", StringComparison.Ordinal));
 
     private static string? ParseCadYear(string value)
     {
