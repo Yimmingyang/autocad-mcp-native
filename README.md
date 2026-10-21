@@ -11,7 +11,7 @@
 
 ### Windows 安装器
 
-仓库新增 `installer/` WinForms 安装器：扫描 AutoCAD 2020–2027 并显示构建号；安装时依据目标 AutoCAD 的 `acmgd.dll`、`acdbmgd.dll`、`accoremgd.dll` 和运行时配置在本机编译插件，生成对应 Bundle 后备份安装；部署便携 Node.js LTS、MCP 服务并更新 Codex 配置，提供 `get_bridge_status` 连接测试。AutoCAD 2020 使用 .NET Framework 4.7、2021–2024 使用 .NET Framework 4.8；2025/2026 按本机运行时选 .NET 8 或 10，2027 使用 .NET 10。编译和 Bundle 系列校验是安装门槛。AutoCAD 2027 对应 R26.0。
+仓库提供 `installer/` WinForms 连接器：扫描 AutoCAD 2020–2027 并显示构建号；扫描并支持 OpenAI Codex、DeepSeek Harness 两种 MCP 客户端；安装时依据所选 AutoCAD 的本机 API 和运行时编译插件，部署便携 Node.js/MCP 服务，并写入所选 AI 客户端配置。状态检测分开报告 AutoCAD 插件握手、MCP `tools/list` 工具发现和 AI 客户端配置。AutoCAD 2020 使用 .NET Framework 4.7、2021–2024 使用 .NET Framework 4.8；2025/2026 按本机运行时选 .NET 8 或 10，2027 使用 .NET 10。AutoCAD 2027 对应 R26.0。
 
 构建安装器：使用 Windows .NET 8 SDK 运行 `dotnet publish installer/AutoCadMcpInstaller.csproj -c Release -o installer/publish`。单文件输出为 `installer/publish/AutoCadMcpInstaller.exe`。
 
@@ -29,11 +29,12 @@
 
 - Windows x64；AutoCAD 2020–2027（安装时需要相应 API 文件和可识别的 .NET 运行时）。
 - 安装器可部署便携 Node.js LTS 和从 Microsoft 官方源校验下载的 .NET SDK；编译阶段需要访问 GitHub 源码与 NuGet。
-- 兼容 MCP 客户端（示例为 Codex）。安装器需要所选 AutoCAD 版本的 managed API DLL；独立插件构建需要对应主机的 API。
+- Windows x64 上的 OpenAI Codex 或 DeepSeek Harness。其他 MCP 客户端可手动配置 stdio 服务，目前不会由连接器自动发现/管理。
+- 安装器需要所选 AutoCAD 版本的 managed API DLL；插件按对应本机 API 编译。
 
 ### 快速安装
 
-从 [GitHub Releases](https://github.com/yanmiong/autocad-mcp-native/releases/latest) 下载 `AutoCadMcpInstaller.exe`，运行后选择 AutoCAD 版本并点“安装/修复”。安装期间关闭 AutoCAD。安装器会备份旧插件和 Codex MCP 配置，并只将本插件 bundle 子树追加到对应 AutoCAD 配置的 `TRUSTEDPATHS`（不关闭 `SECURELOAD`）；打开 AutoCAD 后点“测试 MCP 连接”。
+从 [GitHub Releases](https://github.com/yanmiong/autocad-mcp-native/releases/latest) 下载 `AutoCadMcpInstaller.exe`，运行后选择 AutoCAD 版本和已检测的 AI 客户端，再点“安装/修复”。安装期间关闭 AutoCAD。安装器会备份旧插件和所选客户端配置，并只将本插件 bundle 子树追加到对应 AutoCAD 配置的 `TRUSTEDPATHS`（不关闭 `SECURELOAD`）。打开 AutoCAD 和所选 AI 客户端后点“测试 MCP 连接”；该检查分别报告 CAD 插件响应、MCP 工具清单能否发现和客户端配置是否写入。AI 客户端需重启/新建会话，实际工具可见性还应在客户端内核实。
 
 手动运行 MCP 服务或开发服务端时，可以从源码安装：
 
@@ -45,7 +46,7 @@ npm test
 npm run check
 ```
 
-重启 Codex，先调用 `get_bridge_status`、`drawing_summary` 等只读工具确认连接，再进行写操作。完整安装、更新、卸载说明见 [`docs/安装与使用.md`](docs/安装与使用.md)，故障排查见 [`docs/故障排查.md`](docs/故障排查.md)，工具参数见 [`docs/API.md`](docs/API.md)。
+重启/新建 AI 会话，先调用 `get_bridge_status`、`drawing_summary` 等只读工具确认连接，再进行写操作。完整安装、更新、卸载说明见 [`docs/安装与使用.md`](docs/安装与使用.md)，故障排查见 [`docs/故障排查.md`](docs/故障排查.md)，工具参数见 [`docs/API.md`](docs/API.md)。
 
 ### 安全建议
 

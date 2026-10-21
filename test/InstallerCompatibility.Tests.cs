@@ -41,6 +41,41 @@ var temp = Path.Combine(Path.GetTempPath(), "cadcompat-tests-" + Guid.NewGuid().
 Directory.CreateDirectory(temp);
 try
 {
+    var user = Path.Combine(temp, "user"); Directory.CreateDirectory(user);
+    Directory.CreateDirectory(Path.Combine(user, ".codex"));
+    File.WriteAllText(Path.Combine(user, ".codex", "config.toml"), "# fixture");
+    var harnessHome = Path.Combine(user, ".dsh"); Directory.CreateDirectory(harnessHome);
+    var clients = McpClientIntegration.Detect(user, Path.Combine(user, "AppData"), "", harnessHome);
+    Equal(true, clients.Single(x => x.Kind == McpClientKind.Codex).IsDetected, "Codex detection");
+    Equal(true, clients.Single(x => x.Kind == McpClientKind.DeepSeekHarness).IsDetected, "DeepSeek Harness detection");
+    var nodeFixture = Path.Combine(temp, "Node Runtime", "node.exe");
+    var entryFixture = Path.Combine(temp, "MCP Server", "index.js");
+    var harnessPatch = McpClientIntegration.BuildHarnessPatch(nodeFixture, entryFixture, "2025");
+    if (!harnessPatch.Contains("transport: stdio", StringComparison.Ordinal)
+        || !harnessPatch.Contains("AUTOCAD_MCP_PIPE: '\\\\.\\pipe\\AutoCAD_MCP_2025_V2'", StringComparison.Ordinal)
+        || !harnessPatch.Contains(McpClientIntegration.YamlQuote(nodeFixture), StringComparison.Ordinal))
+        throw new InvalidOperationException("DeepSeek Harness stdio patch is missing its command, node paths, or AutoCAD named pipe.");
+    var once = McpClientIntegration.UpsertHarnessPatch("# existing harness configuration", harnessPatch, "2025");
+    var twice = McpClientIntegration.UpsertHarnessPatch(once, McpClientIntegration.BuildHarnessPatch(nodeFixture, entryFixture, "2025"), "2025");
+    Equal(once, twice, "DeepSeek Harness managed patch idempotency");
+    if (!twice.StartsWith("# existing harness configuration", StringComparison.Ordinal)) throw new InvalidOperationException("DeepSeek Harness configuration did not preserve existing content.");
+    try { McpClientIntegration.UpsertHarnessPatch("- insert:\n    - id: mcp-autocad-native-2025\n", harnessPatch, "2025"); throw new InvalidOperationException("unmanaged Harness entry was overwritten"); }
+    catch (InvalidOperationException e) when (e.Message.Contains("未由安装器管理", StringComparison.Ordinal)) { }
+    var harnessClient = clients.Single(x => x.Kind == McpClientKind.DeepSeekHarness) with { ConfigPath = Path.Combine(harnessHome, "cordis.patch.yml") };
+    File.WriteAllText(harnessClient.ConfigPath, "# preserve this user setting\n");
+    var writtenHarnessConfig = McpClientIntegration.ConfigureHarness(harnessClient, nodeFixture, entryFixture, "2025");
+    Equal(harnessClient.ConfigPath, writtenHarnessConfig, "Harness config path");
+    var persistedHarness = File.ReadAllText(harnessClient.ConfigPath);
+    if (!persistedHarness.Contains("# preserve this user setting", StringComparison.Ordinal)
+        || !persistedHarness.Contains("mcp-autocad-native-2025", StringComparison.Ordinal))
+        throw new InvalidOperationException("Harness integration did not preserve user config and write its MCP entry.");
+    if (!Directory.GetFiles(harnessHome, "cordis.patch.yml.backup-*").Any()) throw new InvalidOperationException("Harness configuration backup was not created.");
+    var codexClient = clients.Single(x => x.Kind == McpClientKind.Codex) with { ConfigPath = Path.Combine(user, ".codex", "config.toml") };
+    var writtenCodexConfig = McpClientIntegration.ConfigureCodex(codexClient, nodeFixture, entryFixture, "2025");
+    Equal(codexClient.ConfigPath, writtenCodexConfig, "Codex config path");
+    if (!File.ReadAllText(codexClient.ConfigPath).Contains("[mcp_servers.autocad_native]", StringComparison.Ordinal))
+        throw new InvalidOperationException("Codex MCP config block was not written.");
+
     var spacedRuntime = Path.Combine(temp, "Program Files", "Node.js");
     Directory.CreateDirectory(Path.Combine(spacedRuntime, "node_modules", "npm", "bin"));
     var npmCmd = Path.Combine(spacedRuntime, "npm.cmd");
@@ -80,4 +115,13 @@ try
     Equal(false, CadCompatibility.IsSupported("2020", temp), "missing API gate");
 }
 finally { Directory.Delete(temp, true); }
-Console.WriteLine("PASS: 8 AutoCAD series mappings, 8 target frameworks, runtimeconfig parsing, install gates, release SHA-256 validation, npm path quoting, and scoped trusted-path registration.");
+var repo = new DirectoryInfo(Directory.GetCurrentDirectory());
+while (repo is not null && !File.Exists(Path.Combine(repo.FullName, "src", "index.js"))) repo = repo.Parent;
+if (repo is null) throw new DirectoryNotFoundException("Could not locate the repository's MCP server entry point.");
+var node = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+    .Select(folder => Path.Combine(folder.Trim('"'), "node.exe")).FirstOrDefault(File.Exists)
+    ?? throw new FileNotFoundException("Node.js is required for MCP stdio integration tests.");
+var toolList = await McpServerProbe.ListToolsAsync(node, Path.Combine(repo.FullName, "src", "index.js"), @"\\.\pipe\AutoCAD_MCP_TEST_V2", TimeSpan.FromSeconds(10));
+if (toolList.Count < 10 || !toolList.Any(tool => tool.Name == "get_bridge_status") || !toolList.Any(tool => tool.Name == "draw_line"))
+    throw new InvalidOperationException($"MCP stdio integration test did not discover expected AutoCAD tools: {string.Join(", ", toolList.Select(tool => tool.Name))}");
+Console.WriteLine($"PASS: 8 AutoCAD series mappings, 8 target frameworks, runtimeconfig parsing, install gates, release SHA-256 validation, npm path quoting, scoped trust paths, Codex/DeepSeek Harness detection and configuration, and stdio MCP handshake ({toolList.Count} tools discovered).");
