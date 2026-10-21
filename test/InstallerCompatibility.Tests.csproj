@@ -10,5 +10,7 @@
     <Compile Include="..\installer\ReleaseAssetIntegrity.cs" Link="ReleaseAssetIntegrity.cs" />
     <Compile Include="..\installer\NpmRunner.cs" Link="NpmRunner.cs" />
     <Compile Include="..\installer\CadTrustPathRegistration.cs" Link="CadTrustPathRegistration.cs" />
+    <Compile Include="..\installer\McpClientIntegration.cs" Link="McpClientIntegration.cs" />
+    <Compile Include="..\installer\McpServerProbe.cs" Link="McpServerProbe.cs" />
   </ItemGroup>
 </Project>

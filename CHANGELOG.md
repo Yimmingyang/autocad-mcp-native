@@ -1,3 +1,10 @@
+## 0.6.0 — 2026-10-21
+
+- Expand the Windows connector UI to detect and select OpenAI Codex or DeepSeek Harness as the MCP client.
+- Install/repair writes a managed, backed-up client configuration: Codex TOML or DeepSeek Harness `cordis.patch.yml` using its official stdio MCP client.
+- Connection diagnostics now separate AutoCAD pipe health, a real MCP stdio initialize + `tools/list` probe, and selected-client configuration presence; discovered tools are listed in the status.
+- Add automated client detection/configuration and MCP stdio handshake tests.
+- The diagnostic does not claim the AI application has loaded the new config; restart/new session and tool-list confirmation are still required.
 # 更新记录
 
 ## 0.5.10 — 2026-10-21

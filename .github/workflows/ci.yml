@@ -19,9 +19,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+      - run: npm ci
       - run: dotnet run --project test/InstallerCompatibility.Tests.csproj -c Release
       - run: dotnet build installer/AutoCadMcpInstaller.csproj -c Release --verbosity quiet
       - name: Validate AutoCAD plugin target framework selection

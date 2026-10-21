@@ -19,7 +19,7 @@ test('MCP advertises polyline edits and validates bulges before bridging', async
 
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), [
-    'apply_drawing_plan', 'cad_call', 'count_modelspace_entities', 'create_block', 'create_drawing_copy', 'delete_entity', 'draw_circle', 'draw_line', 'draw_polyline', 'draw_rectangle', 'get_active_drawing', 'get_bridge_status', 'insert_block', 'inspect_drawing_geometry', 'list_blocks', 'list_layers', 'list_modelspace_entities', 'list_tools', 'move_entity', 'open_drawing', 'preview_drawing_plan', 'save_active_drawing', 'set_entity_layer'
+    'apply_drawing_plan', 'audit_drawing_read', 'cad_call', 'count_modelspace_entities', 'create_block', 'create_drawing_copy', 'delete_entity', 'draw_circle', 'draw_line', 'draw_polyline', 'draw_rectangle', 'get_active_drawing', 'get_bridge_status', 'insert_block', 'inspect_drawing_geometry', 'list_blocks', 'list_layers', 'list_modelspace_entities', 'list_tools', 'move_entity', 'open_drawing', 'preview_drawing_plan', 'save_active_drawing', 'set_entity_layer'
   ]);
   const drawing = await client.callTool({ name: 'get_active_drawing', arguments: {} });
   assert.match(drawing.content[0].text, /test\.dwg/);
@@ -29,6 +29,8 @@ test('MCP advertises polyline edits and validates bulges before bridging', async
   assert.match(layers.content[0].text, /list_layers/);
   const counts = await client.callTool({ name: 'count_modelspace_entities', arguments: { limit: 10 } });
   assert.match(counts.content[0].text, /count_modelspace_entities/);
+  const audit = await client.callTool({ name: 'audit_drawing_read', arguments: {} });
+  assert.match(audit.content[0].text, /audit_drawing_read/);
   const planned = await client.callTool({ name: 'preview_drawing_plan', arguments: { operations: [{ type: 'polyline', points: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 10 }], closed: true, bulges: [0, 0.41421356, 0] }] } });
   assert.match(planned.content[0].text, /preview_drawing_plan/);
   const invalid = await client.callTool({ name: 'preview_drawing_plan', arguments: { operations: [{ type: 'polyline', points: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 10 }], bulges: [0] }] } });

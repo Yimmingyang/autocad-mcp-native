@@ -13,7 +13,7 @@ using Autodesk.AutoCAD.Runtime;
 namespace AutoCadMcpPlugin;
 
 /// <summary>
-/// AutoCAD in-process MCP bridge (v0.5.10).
+/// AutoCAD in-process MCP bridge (v0.6.0).
 /// One named pipe, many native operations, self-describing registry.
 /// </summary>
 public sealed class Entry : IExtensionApplication
@@ -35,7 +35,7 @@ public sealed class Entry : IExtensionApplication
 #else
     private const string PipeName = "AutoCAD_MCP_2025_V2";
 #endif
-    private const string Version = "0.5.10";
+    private const string Version = "0.6.0";
     private const int PipeInstances = 4;
     private const double CoordinateLimit = 1e7;
 
@@ -281,6 +281,7 @@ public sealed class Entry : IExtensionApplication
         Add("count_modelspace_entities", "Count model-space entities by DXF type.", "{limit?:int}", false, a => CountEntities(a));
         Add("list_modelspace_entities", "List model-space handles/types/layers, optionally filtered by type or layer.", "{limit?:int, type?:string, layer?:string}", false, a => ListEntities(a));
         Add("inspect_drawing_geometry", "Full geometry dump (lines, arcs, circles, polylines with bulges, ellipse, spline control points, text, dimensions, hatch).", "{limit?:int, includeSplines?:bool}", false, a => Inspect(a));
+        Add("audit_drawing_read", "Deterministic model-space inventory audit. Reports enumerated entity counts, per-type counts, unreadable entities and unsupported entity types. This proves database enumeration coverage only; it does not prove drawing semantics or design correctness.", "{}", false, _ => AuditDrawingRead());
         Add("entity_info", "Every readable property of one entity by handle.", "{handle:string}", false, a => EntityInfo(a));
         Add("select_entities", "Select handles by type/layer/colour/text filter (whole model space).", "{type?:string, layer?:string, colorIndex?:int, text?:string, limit?:int}", false, a => SelectEntities(a));
         Add("measure", "Length of a curve, area of a closed polyline/circle/hatch, or drawing extents.", "{handle?:string}", false, a => Measure(a));
@@ -324,8 +325,8 @@ public sealed class Entry : IExtensionApplication
         // ---- system variables / escape hatches -------------------------------
         Add("text_style_create", "Create a text style; typeface is a TrueType family (default SimSun) so Chinese renders instead of '?'.", "{name:string, typeface?:string, bigFont?:string, current?:bool}", true, a => TextStyleCreate(a));
         Add("list_text_styles", "List text styles with typeface / big font so callers can pick a CJK-capable one.", "{}", false, _ => ListTextStyles());
-        Add("extract_parameters", "Read EVERY parameter in one call: dimensions (value + text override), dimension callout texts, all notes, title-block texts, holes, arcs, layers, blocks, text styles and the drawing scale derived from dimension definition points. Use this before any geometry work so nothing is missed.", "{}", false, _ => ExtractParameters());
-        Add("compare_geometry", "Entity-level diff of the active drawing against another DWG/DXF-backed drawing, optionally limited to a region. Pair entities by type and normalised geometry; returns counts and samples of differences.", "{path:string, x0?:number, y0?:number, x1?:number, y1?:number}", false, a => CompareGeometry(a));
+        Add("extract_parameters", "Extract supported parameters found in ModelSpace and drawing tables; this is not proof that all design intent is represented or readable. Pair with audit_drawing_read and targeted entity inspection.", "{}", false, _ => ExtractParameters());
+        Add("compare_geometry", "Raw-coordinate entity signature diff against another drawing. No origin/rotation/scale registration or full property comparison is performed; do not treat identical=true as a registered drawing or design correctness proof.", "{path:string, x0?:number, y0?:number, x1?:number, y1?:number}", false, a => CompareGeometry(a));
         Add("get_sysvar", "Read one AutoCAD system variable.", "{name:string}", false, a => new { name = Str(a, "name"), value = SysVar(Str(a, "name")) });
         Add("set_sysvar", "Write one AutoCAD system variable.", "{name:string, value:object}", true, a => SetSysVar(a));
         Add("send_command", "Run an AutoCAD command synchronously; pass each prompt answer in args, e.g. {command:\"_.CIRCLE\",args:[\"10,10\",\"5\"]}.", "{command:string, args?:string[]}", true, a => SendCommand(a));
@@ -920,18 +921,39 @@ public sealed class Entry : IExtensionApplication
     private static object Inspect(JsonElement a)
     {
         var limit = ClampInt(Int(a, "limit", 2000), 1, 20000);
-        var includeSplines = Bool(a, "includeSplines", false);
+        var includeSplines = Bool(a, "includeSplines", true);
         var db = Db();
         using var tr = db.TransactionManager.StartOpenCloseTransaction();
         var ms = (BlockTableRecord)tr.GetObject(ModelSpace(tr, db), OpenMode.ForRead);
         var items = new List<object>();
+        var typeCounts = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        var geometryErrors = new List<object>();
+        var totalEntities = 0;
+        var nonEntities = 0;
+        var objectReadErrors = 0;
         var min = new Point3d(double.MaxValue, double.MaxValue, 0);
         var max = new Point3d(double.MinValue, double.MinValue, 0);
         var has = false;
         foreach (ObjectId id in ms)
         {
-            if (items.Count >= limit) break;
-            if (tr.GetObject(id, OpenMode.ForRead, false) is not Entity e) continue;
+            Entity? e;
+            try { e = tr.GetObject(id, OpenMode.ForRead, false) as Entity; }
+            catch (System.Exception ex)
+            {
+                objectReadErrors++;
+                if (geometryErrors.Count < 100) geometryErrors.Add(new { handle = SafeHandle(id), stage = "open", error = ex.Message });
+                continue;
+            }
+            if (e is null) { nonEntities++; continue; }
+            totalEntities++;
+            var dxfType = "<type-read-error>";
+            try { dxfType = e.GetRXClass()?.DxfName ?? "<unknown>"; }
+            catch (System.Exception ex)
+            {
+                objectReadErrors++;
+                if (geometryErrors.Count < 100) geometryErrors.Add(new { handle = SafeHandle(id), stage = "type", error = ex.Message });
+            }
+            typeCounts[dxfType] = typeCounts.TryGetValue(dxfType, out var typeCount) ? typeCount + 1 : 1;
             object? geometry = null;
             try
             {
@@ -942,15 +964,29 @@ public sealed class Entry : IExtensionApplication
                     Arc ar => new { center = P(ar.Center), radius = Math.Round(ar.Radius, 9), startAngleDegrees = Rad(ar.StartAngle), endAngleDegrees = Rad(ar.EndAngle), length = Math.Round(ar.Length, 9) },
                     Polyline pl => new { closed = pl.Closed, length = Math.Round(pl.Length, 9), vertices = Vertices(pl) },
                     Ellipse el => new { center = P(el.Center), majorRadius = Math.Round(el.MajorRadius, 9), radiusRatio = Math.Round(el.RadiusRatio, 9) },
-                    Spline sp when includeSplines => new { degree = sp.Degree, closed = sp.Closed, length = Len(sp) },
+                    Spline sp when includeSplines => new
+                    {
+                        degree = sp.Degree,
+                        closed = sp.Closed,
+                        length = Math.Round(Len(sp), 9),
+                        controlPoints = Enumerable.Range(0, sp.NumControlPoints).Select(i => P(sp.GetControlPointAt(i))).ToArray(),
+                        fitPoints = Enumerable.Range(0, sp.NumFitPoints).Select(i => P(sp.GetFitPointAt(i))).ToArray()
+                    },
                     DBText dt => new { text = dt.TextString, position = P(dt.Position), height = dt.Height, rotationDegrees = Rad(dt.Rotation) },
-                    MText mt => new { text = mt.Contents, position = P(mt.Location), height = mt.TextHeight },
+                    MText mt => new { text = mt.Text, rawContents = mt.Contents, position = P(mt.Location), height = mt.TextHeight },
+                    Leader leader => new { vertices = Enumerable.Range(0, leader.NumVertices).Select(i => P(leader.VertexAt(i))).ToArray(), annotation = LeaderAnnotation(tr, leader) },
                     BlockReference br => new { block = BlockName(tr, br), position = P(br.Position), rotationDegrees = Rad(br.Rotation) },
                     Hatch h => new { pattern = h.PatternName, area = Math.Round(h.Area, 9) },
-                    Dimension dm => new { measurement = Math.Round(dm.Measurement, 9), text = dm.DimensionText, textPosition = P(dm.TextPosition) }
+                    Dimension dm => new { measurement = Math.Round(dm.Measurement, 9), text = dm.DimensionText, textPosition = P(dm.TextPosition) },
+                    _ => throw new NotSupportedException($"No geometry reader for {dxfType}.")
                 };
             }
-            catch (System.Exception ex) { geometry = new { readError = ex.Message }; }
+            catch (System.Exception ex)
+            {
+                geometry = new { readError = ex.Message };
+                objectReadErrors++;
+                if (geometryErrors.Count < 100) geometryErrors.Add(new { handle = SafeHandle(id), type = dxfType, layer = SafeLayer(e), stage = "geometry", error = ex.Message });
+            }
 
             if (TryExtents(e, out var bmin, out var bmax))
             {
@@ -958,7 +994,7 @@ public sealed class Entry : IExtensionApplication
                 min = new Point3d(Math.Min(min.X, bmin.X), Math.Min(min.Y, bmin.Y), 0);
                 max = new Point3d(Math.Max(max.X, bmax.X), Math.Max(max.Y, bmax.Y), 0);
             }
-            items.Add(new { handle = e.Handle.ToString(), type = e.GetRXClass().DxfName, layer = e.Layer, geometry });
+                    if (items.Count < limit) items.Add(new { handle = SafeHandle(id), type = dxfType, layer = SafeLayer(e), geometry });
         }
         return new
         {
@@ -966,11 +1002,128 @@ public sealed class Entry : IExtensionApplication
             path = Doc().Name,
             units = db.Insunits.ToString(),
             unitsCode = (int)db.Insunits,
-            modelSpaceEntities = items.Count,
-            truncated = items.Count >= limit,
+            modelSpaceEntities = totalEntities,
+            totalEntities,
+            nonEntityObjects = nonEntities,
+            readErrorCount = objectReadErrors,
+            geometryReadErrors = geometryErrors,
+            geometryReadErrorsTruncated = objectReadErrors > geometryErrors.Count,
+            entityCountsByDxfType = typeCounts,
+            geometryCheckedEntities = totalEntities,
+            truncated = totalEntities > items.Count,
             overallBounds = has ? new { min = P(min), max = P(max) } : null,
             entities = items
         };
+    }
+
+    private static object AuditDrawingRead()
+    {
+        var doc = Doc();
+        var db = doc.Database;
+        using var tr = db.TransactionManager.StartOpenCloseTransaction();
+        var ms = (BlockTableRecord)tr.GetObject(ModelSpace(tr, db), OpenMode.ForRead);
+        var byType = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        var unsupported = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        var failures = new List<object>();
+        var enumerated = 0;
+        var entityCount = 0;
+        var readFailures = 0;
+        var nonEntities = 0;
+        var enumeratedObjects = 0;
+
+        foreach (ObjectId id in ms)
+        {
+            enumeratedObjects++;
+            enumerated++;
+            try
+            {
+                if (tr.GetObject(id, OpenMode.ForRead, false) is not Entity e)
+                {
+                    nonEntities++;
+                    continue;
+                }
+
+                entityCount++;
+                string type;
+                try { type = e.GetRXClass()?.DxfName ?? "<unknown>"; }
+                catch (System.Exception ex)
+                {
+                    type = "<type-read-error>";
+                    readFailures++;
+                    if (failures.Count < 100) failures.Add(new { handle = SafeHandle(id), stage = "type", error = ex.Message });
+                }
+                byType[type] = byType.TryGetValue(type, out var n) ? n + 1 : 1;
+
+                // Inventory support is deliberately conservative. These types have explicit
+                // geometry extraction in Inspect; all other types remain visible as unclassified.
+                if (e is not (Line or Circle or Arc or Polyline or Ellipse or Spline or DBText or MText or Leader or BlockReference or Hatch or Dimension))
+                    unsupported[type] = unsupported.TryGetValue(type, out var u) ? u + 1 : 1;
+            }
+            catch (System.Exception ex)
+            {
+                readFailures++;
+                if (failures.Count < 100) failures.Add(new { handle = SafeHandle(id), stage = "open", error = ex.Message });
+            }
+        }
+
+        var failedSamplesTruncated = readFailures > failures.Count;
+        var imageTypes = new HashSet<string>(StringComparer.Ordinal) { "IMAGE", "OLE2FRAME", "PDFUNDERLAY", "DWFUNDERLAY", "DGNUNDERLAY", "WIPEOUT" };
+        var ocrCandidates = byType.Where(kv => imageTypes.Contains(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
+        var proxyEntities = byType.Where(kv => kv.Key.Contains("PROXY", StringComparison.OrdinalIgnoreCase)).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
+        return new
+        {
+            drawing = Path.GetFileName(doc.Name),
+            path = doc.Name,
+            space = "ModelSpace",
+            verificationMode = "database-inventory-only",
+            enumeratedObjectIds = enumeratedObjects,
+            entityCount,
+            nonEntityObjects = nonEntities,
+            unreadableEntityCount = readFailures,
+            unreadableSamples = failures,
+            unreadableSamplesTruncated = failedSamplesTruncated,
+            entityCountsByDxfType = byType,
+            unclassifiedEntityCountsByDxfType = unsupported,
+            rasterAndUnderlayTypesForVisualOrOcrReview = ocrCandidates,
+            proxyEntityTypesForSeparateReview = proxyEntities,
+            OCRNeededForNativeTextAndDimensionEntities = false,
+            OCRSuggestedForRasterOrUnderlayObjects = ocrCandidates.Count > 0,
+            enumerationComplete = true,
+            entityOpenComplete = readFailures == 0,
+            allEntityTypesInGeometryAllowlist = unsupported.Count == 0,
+            semanticCorrectnessVerified = false,
+            note = "enumerationComplete means the ModelSpace ObjectId sequence was traversed; entityOpenComplete only reports whether all encountered entity IDs opened; allEntityTypesInGeometryAllowlist reports conservative supported-type classification. Neither flag means geometry parameters were fully extracted. It does not validate dimensions against intent, paper space/layouts, nested block contents, xrefs, proxy payloads, or visual legibility."
+        };
+    }
+
+    private static string SafeHandle(ObjectId id)
+    {
+        try { return id.Handle.ToString(); }
+        catch { return "<unavailable>"; }
+    }
+
+    private static string SafeLayer(Entity entity)
+    {
+        try { return entity.Layer; }
+        catch { return "<unavailable>"; }
+    }
+
+    private static object? LeaderAnnotation(Transaction tr, Leader leader)
+    {
+        try
+        {
+            if (leader.Annotation.IsNull || !leader.Annotation.IsValid) return null;
+            var entity = tr.GetObject(leader.Annotation, OpenMode.ForRead, false) as Entity;
+            return entity switch
+            {
+                DBText text => new { type = "TEXT", text = text.TextString },
+                MText mtext => new { type = "MTEXT", text = mtext.Text, rawContents = mtext.Contents },
+                Dimension dimension => new { type = dimension.GetRXClass()?.DxfName, text = dimension.DimensionText, measurement = Math.Round(dimension.Measurement, 9) },
+                null => null,
+                _ => new { type = entity.GetRXClass()?.DxfName, handle = entity.Handle.ToString() }
+            };
+        }
+        catch (System.Exception ex) { return new { readError = ex.Message }; }
     }
 
     private static object Measure(JsonElement a)
@@ -1580,7 +1733,7 @@ public sealed class Entry : IExtensionApplication
                     texts.Add(new { handle = t.Handle.ToString(), type = "TEXT", layer = t.Layer, style = TextStyleName(tr, t.TextStyleId), position = P(t.Position), height = Math.Round(t.Height, 3), text = t.TextString });
                     break;
                 case MText mt:
-                    texts.Add(new { handle = mt.Handle.ToString(), type = "MTEXT", layer = mt.Layer, style = TextStyleName(tr, mt.TextStyleId), position = P(mt.Location), height = Math.Round(mt.TextHeight, 3), text = mt.Contents });
+                    texts.Add(new { handle = mt.Handle.ToString(), type = "MTEXT", layer = mt.Layer, style = TextStyleName(tr, mt.TextStyleId), position = P(mt.Location), height = Math.Round(mt.TextHeight, 3), text = mt.Text, rawContents = mt.Contents });
                     break;
                 case Circle c:
                     holes.Add(new { handle = c.Handle.ToString(), layer = c.Layer, center = P(c.Center), diameter = Math.Round(c.Diameter, 4) });
@@ -1685,12 +1838,16 @@ public sealed class Entry : IExtensionApplication
         {
             active = Path.GetFileName(Doc().Name),
             comparedWith = Path.GetFileName(path),
+            comparisonMode = "raw-coordinate-signatures",
+            coordinateRegistrationApplied = false,
+            propertyCompleteness = "geometry signatures only; not a full layer/style/block/dimension-property comparison",
             region = hasRegion ? new { x0 = rx0, y0 = ry0, x1 = rx1, y1 = ry1 } : null,
             activeCount = mine.Count,
             comparedCount = theirs.Count,
             identical = onlyMine.Count == 0 && onlyTheirs.Count == 0,
             onlyInActive = onlyMine.Count,
             onlyInCompared = onlyTheirs.Count,
+            interpretation = "A raw signature difference may reflect different drawing origins, rotations, scales, omitted entity types, or geometry changes. Register coordinate systems and inspect properties before classifying differences.",
             sampleOnlyInActive = onlyMine.Take(20).ToArray(),
             sampleOnlyInCompared = onlyTheirs.Take(20).ToArray()
         };

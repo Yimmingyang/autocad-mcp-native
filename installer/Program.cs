@@ -18,27 +18,32 @@ internal sealed record CadInstall(string Version, string ProductKey, string? Loc
 internal sealed class MainForm : Form
 {
     private readonly ListView list = new() { Dock = DockStyle.Top, Height = 190, View = View.Details, FullRowSelect = true };
-    private readonly Label status = new() { Dock = DockStyle.Top, Height = 70, Text = "正在检测本机 AutoCAD...", Padding = new Padding(8) };
+    private readonly Label status = new() { Dock = DockStyle.Top, Height = 120, Text = "正在检测本机 AutoCAD...", Padding = new Padding(8), AutoEllipsis = true };
     private readonly Button refresh = new() { Text = "重新检测", Width = 110 };
     private readonly Button install = new() { Text = "安装/修复", Width = 110 };
     private readonly Button open = new() { Text = "打开 AutoCAD", Width = 110 };
     private readonly Button testConnection = new() { Text = "测试 MCP 连接", Width = 130 };
+    private readonly ComboBox clientChoice = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 460 };
+    private readonly Label clientStatus = new() { Dock = DockStyle.Top, Height = 38, Padding = new Padding(8, 4, 8, 2), Text = "正在检测 AI 客户端..." };
     private readonly HttpClient http = new() { Timeout = TimeSpan.FromMinutes(30) };
     private List<CadInstall> installations = [];
+    private IReadOnlyList<McpClientInstallation> clients = [];
     private const string LatestReleaseUrl = "https://github.com/yanmiong/autocad-mcp-native/releases/latest";
     private const string LatestAssetBaseUrl = "https://github.com/yanmiong/autocad-mcp-native/releases/latest/download/";
 
     public MainForm()
     {
-        Text = "AutoCAD MCP 安装器"; Width = 680; Height = 390; StartPosition = FormStartPosition.CenterScreen;
+        Text = "AutoCAD MCP 连接器"; Width = 820; Height = 570; MinimumSize = new Size(760, 500); StartPosition = FormStartPosition.CenterScreen;
         list.Columns.Add("AutoCAD 版本 / 构建", 210); list.Columns.Add("系列", 95); list.Columns.Add("插件状态", 340);
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(8) };
         buttons.Controls.AddRange([refresh, install, open, testConnection]);
-        Controls.Add(buttons); Controls.Add(status); Controls.Add(list);
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("AutoCadMcpInstaller/0.5.10");
+        var clientLabel = new Label { Text = "选择要接入的 AI 客户端（仅显示检测到的客户端）", Dock = DockStyle.Top, Height = 28, Padding = new Padding(8, 6, 4, 2) };
+        clientChoice.Dock = DockStyle.Top; clientChoice.Height = 30; clientChoice.Margin = new Padding(8);
+        Controls.Add(buttons); Controls.Add(status); Controls.Add(clientStatus); Controls.Add(clientChoice); Controls.Add(clientLabel); Controls.Add(list);
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("AutoCadMcpInstaller/0.6.0");
         refresh.Click += (_, _) => Detect(); install.Click += async (_, _) => await InstallSelected(); open.Click += (_, _) => OpenSelected();
         testConnection.Click += async (_, _) => await TestConnection();
-        Shown += (_, _) => Detect();
+        Shown += (_, _) => { Detect(); DetectClients(); };
     }
 
     private void Detect()
@@ -60,6 +65,25 @@ internal sealed class MainForm : Form
             var item = list.Items.Cast<ListViewItem>().FirstOrDefault(x => (x.Tag as CadInstall)?.Version == selectedYear) ?? list.Items[0];
             item.Selected = true;
         }
+        DetectClients();
+    }
+
+    private void DetectClients()
+    {
+        clients = McpClientIntegration.Detect(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Environment.GetEnvironmentVariable("PATH"), Environment.GetEnvironmentVariable("DSH_HOME"));
+        var detected = clients.Where(client => client.IsDetected).ToArray();
+        var prior = (clientChoice.SelectedItem as McpClientInstallation)?.Kind;
+        clientChoice.Items.Clear();
+        foreach (var client in detected) clientChoice.Items.Add(client);
+        var selected = detected.FirstOrDefault(client => client.Kind == prior) ?? detected.FirstOrDefault();
+        if (selected is not null) clientChoice.SelectedItem = selected;
+        clientChoice.Enabled = detected.Length > 0;
+        clientStatus.Text = detected.Length == 0
+            ? "未检测到支持的客户端（当前支持 Codex 和 DeepSeek Harness）。"
+            : $"检测到：{string.Join("、", detected.Select(client => $"{client.Name}（{client.DetectionDetail}）"))}。目录存在不一定代表程序正在运行；安装后会写入所选客户端配置，需重启/新建会话以加载工具。";
     }
 
     private static List<CadInstall> FindInstallations()
@@ -287,10 +311,12 @@ internal sealed class MainForm : Form
     }
 
     private CadInstall? Selected() => list.SelectedItems.Count == 0 ? null : list.SelectedItems[0].Tag as CadInstall;
+    private McpClientInstallation? SelectedClient() => clientChoice.SelectedItem as McpClientInstallation;
 
     private async Task InstallSelected()
     {
         var cad = Selected(); if (cad is null) { status.Text = "先选择一个 AutoCAD 版本。"; return; }
+        var client = SelectedClient(); if (client is null) { status.Text = "未检测到支持的 AI 客户端；目前支持 Codex 和 DeepSeek Harness。"; return; }
         if (!IsSupportedBuild(cad)) { status.Text = $"AutoCAD {cad.Version}（{cad.Series}, build {cad.Build ?? "unknown"}）已检测到，但缺少本机 API 文件或无法识别 .NET 运行时，暂未开始安装。"; return; }
         if (Process.GetProcessesByName("acad").Length > 0) { status.Text = "请先保存并退出 AutoCAD，再重试安装。"; return; }
         install.Enabled = false;
@@ -316,20 +342,20 @@ internal sealed class MainForm : Form
             var trustError = false;
             try { trustedProfiles = CadTrustPathRegistration.RegisterForCurrentUser(cad.Series, target); }
             catch { trustError = true; }
-            var mcp = await InstallMcpServerAndConfigureClient(cad.Version);
+            var mcp = await InstallMcpServerAndConfigureClient(cad.Version, client);
             Detect();
             var trustStatus = trustedProfiles > 0
                 ? $"已为 {trustedProfiles} 个 AutoCAD 配置仅信任本插件目录。"
                 : trustError
                     ? "未能自动登记 AutoCAD 插件可信目录；首次启动若出现安全提示，请只允许 AutoCadMcp.bundle。"
                     : "未发现已初始化的 AutoCAD 用户配置；首次启动若出现安全提示，请只允许 AutoCadMcp.bundle。";
-            status.Text = $"AutoCAD 插件已安装（SHA-256 {hash[..12]}…）。{trustStatus}{mcp} 启动/重启 AutoCAD 后点“测试 MCP 连接”。";
+            status.Text = $"AutoCAD 插件已安装（SHA-256 {hash[..12]}…）。{trustStatus}{mcp} 启动/重启 AutoCAD 后点“测试 MCP 连接”；AI 客户端需重新加载 MCP 配置。";
         }
         catch (Exception e) { status.Text = (pluginInstalled ? "AutoCAD 插件已安装，但 MCP 服务配置未完成：" : "安装未完成：") + e.Message; }
         finally { install.Enabled = true; }
     }
 
-    private async Task<string> InstallMcpServerAndConfigureClient(string cadYear)
+    private async Task<string> InstallMcpServerAndConfigureClient(string cadYear, McpClientInstallation client)
     {
         status.Text = "正在检查 Node.js 运行时...";
         var (node, npm, version) = await EnsureNodeRuntime();
@@ -348,18 +374,12 @@ internal sealed class MainForm : Form
         try { Directory.Move(staged, installRoot); }
         catch { if (Directory.Exists(old)) Directory.Move(old, installRoot); throw; }
 
-        var configPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "config.toml");
-        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
-        var config = File.Exists(configPath) ? File.ReadAllText(configPath) : "";
-        var escapedNode = node.Replace("\\", "\\\\", StringComparison.Ordinal);
-        var escapedEntry = Path.Combine(installRoot, "src", "index.js").Replace("\\", "\\\\", StringComparison.Ordinal);
-        var pipeName = $@"\\.\pipe\AutoCAD_MCP_{cadYear}_V2".Replace("\\", "\\\\", StringComparison.Ordinal);
-        var block = $"[mcp_servers.autocad_native]{Environment.NewLine}command = \"{escapedNode}\"{Environment.NewLine}args = [\"{escapedEntry}\"]{Environment.NewLine}env = {{ AUTOCAD_MCP_PIPE = \"{pipeName}\" }}{Environment.NewLine}startup_timeout_sec = 30{Environment.NewLine}tool_timeout_sec = 180{Environment.NewLine}";
-        var section = new System.Text.RegularExpressions.Regex(@"(?ms)^\[mcp_servers\.autocad_native\]\r?\n.*?(?=^\[|\z)");
-        config = section.IsMatch(config) ? section.Replace(config, block) : config.TrimEnd() + Environment.NewLine + Environment.NewLine + block;
-        if (File.Exists(configPath)) File.Copy(configPath, configPath + ".backup-" + DateTime.Now.ToString("yyyyMMddHHmmss"));
-        File.WriteAllText(configPath, config, new UTF8Encoding(false));
-        return $"MCP 服务已部署并写入 Codex 配置（Node {version}）。";
+        var entry = Path.Combine(installRoot, "src", "index.js");
+        var configPath = client.Kind == McpClientKind.Codex
+            ? McpClientIntegration.ConfigureCodex(client, node, entry, cadYear)
+            : McpClientIntegration.ConfigureHarness(client, node, entry, cadYear);
+        DetectClients();
+        return $"MCP 服务已部署；{client.Name} 配置已写入 {configPath}（Node {version}）。";
     }
 
     private async Task<(string Node, string Npm, string Version)> EnsureNodeRuntime()
@@ -417,11 +437,13 @@ internal sealed class MainForm : Form
 
     private async Task TestConnection()
     {
-        status.Text = "正在连接 AutoCAD 本机命名管道..."; testConnection.Enabled = false;
+        status.Text = "正在检查 AutoCAD、MCP 服务工具清单及所选 AI 客户端配置..."; testConnection.Enabled = false;
         try
         {
             var cad = Selected();
             if (cad is null) throw new InvalidOperationException("先选择 AutoCAD 版本。");
+            var client = SelectedClient();
+            if (client is null) throw new InvalidOperationException("未检测到支持的 AI 客户端；目前支持 Codex 和 DeepSeek Harness。");
             using var pipe = new NamedPipeClientStream(".", $"AutoCAD_MCP_{cad.Version}_V2", PipeDirection.InOut, PipeOptions.Asynchronous);
             await pipe.ConnectAsync(2500);
             using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 1024, leaveOpen: true) { AutoFlush = true };
@@ -430,9 +452,24 @@ internal sealed class MainForm : Form
             var response = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
             using var json = JsonDocument.Parse(response ?? throw new IOException("管道关闭，没有收到响应"));
             if (!json.RootElement.TryGetProperty("ok", out var ok) || !ok.GetBoolean()) throw new IOException(response);
-            status.Text = "连接成功：AutoCAD 原生插件已响应 get_bridge_status。";
+            var node = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoCadMcp", "runtime", "node", "node.exe");
+            var serverRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoCadMcp", "server");
+            var entry = Path.Combine(serverRoot, "src", "index.js");
+            if (!File.Exists(entry)) throw new FileNotFoundException("AutoCAD MCP 服务尚未安装，请先点“安装/修复”。", entry);
+            if (!File.Exists(node)) node = FindOnPath("node.exe") ?? throw new FileNotFoundException("找不到已部署或 PATH 中的 Node.js。", node);
+            var pipeName = $@"\\.\pipe\AutoCAD_MCP_{cad.Version}_V2";
+            var tools = await McpServerProbe.ListToolsAsync(node, entry, pipeName, TimeSpan.FromSeconds(10));
+            if (tools.Count == 0) throw new InvalidDataException("MCP 服务已启动，但没有注册任何 CAD 工具。");
+            var configContent = File.Exists(client.ConfigPath) ? File.ReadAllText(client.ConfigPath) : "";
+            var configured = client.Kind == McpClientKind.Codex
+                ? configContent.Contains("[mcp_servers.autocad_native]", StringComparison.Ordinal)
+                : configContent.Contains($"mcp-autocad-native-{cad.Version}", StringComparison.Ordinal);
+            if (!configured) throw new InvalidOperationException($"{client.Name} 尚未配置 AutoCAD MCP；先点“安装/修复”。");
+            var toolNames = string.Join("、", tools.Take(12).Select(tool => tool.Name));
+            var more = tools.Count > 12 ? $"等共 {tools.Count} 项" : $"共 {tools.Count} 项";
+            status.Text = $"AutoCAD 插件：正常（get_bridge_status）；MCP 服务：正常（{more}工具可发现：{toolNames}）；{client.Name} 配置：正常（已写入，AI 会话实际加载待确认）。请重启/新建会话后，在工具列表确认 mcp__autocad-native__... 工具。";
         }
-        catch (Exception e) { status.Text = "尚未连通：" + e.Message + "。请打开所选 AutoCAD 版本，并重启 Codex 后重试。"; }
+        catch (Exception e) { status.Text = "检查未通过：" + e.Message + "。请打开所选 AutoCAD，并确认所选 AI 客户端已重载 MCP 配置。"; }
         finally { testConnection.Enabled = true; }
     }
 

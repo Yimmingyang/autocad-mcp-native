@@ -1,7 +1,6 @@
-# AutoCAD MCP v0.5.0 原生操作参考
+# AutoCAD MCP v0.6.0 原生操作参考
 
-共 **65** 个原生操作，全部由 AutoCAD 进程内的 .NET API 直接执行（非命令行字符串拼接）。
-MCP 侧调用方式：`cad_call { tool: "<名称>", args: { ... } }`；也可直接用 21 个传统具名工具。
+共 **66** 个原生操作，全部由 AutoCAD 进程内的 .NET API 直接执行（非命令行字符串拼接）。本地 v0.6.0 MCP 服务向客户端注册 24 个入口；底层原生操作通过 `cad_call { tool: "<名称>", args: { ... } }` 调用，先用 `list_tools` 查目录。
 
 
 ## 连接 / 文档
@@ -33,6 +32,7 @@ MCP 侧调用方式：`cad_call { tool: "<名称>", args: { ... } }`；也可直
 | `count_modelspace_entities` | 只读 | `{limit?:int}` | Count model-space entities by DXF type. |
 | `list_modelspace_entities` | 只读 | `{limit?:int, type?:string, layer?:string}` | List model-space handles/types/layers, optionally filtered by type or layer. |
 | `inspect_drawing_geometry` | 只读 | `{limit?:int, includeSplines?:bool}` | Full geometry dump (lines, arcs, circles, polylines with bulges, ellipse, spline control points, text, dimensions, hatch). |
+| `audit_drawing_read` | 只读 | `{}` | Deterministic ModelSpace inventory: enumerated ObjectIds, entity counts by DXF type, unreadable samples and unclassified types. It reports inventory coverage only; it does not independently prove semantic correctness, paper-space/Xref coverage, or design intent. |
 | `entity_info` | 只读 | `{handle:string}` | Every readable property of one entity by handle. |
 | `select_entities` | 只读 | `{type?:string, layer?:string, colorIndex?:int, text?:string, limit?:int}` | Select handles by type/layer/colour/text filter (whole model space). |
 | `measure` | 只读 | `{handle?:string}` | Length of a curve, area of a closed polyline/circle/hatch, or drawing extents. |
@@ -109,11 +109,11 @@ MCP 侧调用方式：`cad_call { tool: "<名称>", args: { ... } }`；也可直
 
 | 操作 | 变更 | 参数 | 说明 |
 | --- | --- | --- | --- |
-| `compare_geometry` | 只读 | `{path:string, x0?:number, y0?:number, x1?:number, y1?:number}` | Entity-level diff of the active drawing against another DWG/DXF-backed drawing, optionally limited to a region. Pair entities by type and normalised geometry; returns counts and samples of differences. |
-| `extract_parameters` | 只读 | `{}` | Read EVERY parameter in one call: dimensions (value + text override), dimension callout texts, all notes, title-block texts, holes, arcs, layers, blocks, text styles and the drawing scale derived from dimension definition points. Use this before any geometry work so nothing is missed. |
+| `compare_geometry` | 只读 | `{path:string, x0?:number, y0?:number, x1?:number, y1?:number}` | Raw-coordinate entity-signature diff. No origin/rotation/scale registration or full property comparison; output includes a warning and must not be treated as registered equality/design correctness proof. |
+| `extract_parameters` | 只读 | `{}` | 提取 ModelSpace 和图纸表中支持读取的参数；不能证明设计意图已完整表达或全部实体均可读。与 `audit_drawing_read` 和针对性实体检查配合使用。 |
 | `list_text_styles` | 只读 | `{}` | List text styles with typeface / big font so callers can pick a CJK-capable one. |
 | `text_style_create` | 写入 | `{name:string, typeface?:string, bigFont?:string, current?:bool}` | Create a text style; typeface is a TrueType family (default SimSun) so Chinese renders instead of '?'. |
 
 ---
 
-生成时间：2026-10-20T14:29:30.881Z　来源：运行中的 AutoCAD v0.5.0 插件 `list_tools` 输出（目录摘要已核对：65 项）。
+生成/核验时间：2026-10-21　来源：AutoCAD 2025 / R25.0.0.0 中运行的 v0.6.0 插件 `list_tools` 实机返回 66 项；新增 `audit_drawing_read`。
