@@ -35,7 +35,7 @@ internal sealed class MainForm : Form
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(8) };
         buttons.Controls.AddRange([refresh, install, open, testConnection]);
         Controls.Add(buttons); Controls.Add(status); Controls.Add(list);
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("AutoCadMcpInstaller/0.5.8");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("AutoCadMcpInstaller/0.5.9");
         refresh.Click += (_, _) => Detect(); install.Click += async (_, _) => await InstallSelected(); open.Click += (_, _) => OpenSelected();
         testConnection.Click += async (_, _) => await TestConnection();
         Shown += (_, _) => Detect();
@@ -312,9 +312,18 @@ internal sealed class MainForm : Form
             CopyDirectory(bundle, stage); if (Directory.Exists(target)) Directory.Move(target, backup);
             try { Directory.Move(stage, target); } catch { if (Directory.Exists(backup)) Directory.Move(backup, target); throw; }
             pluginInstalled = true;
+            var trustedProfiles = 0;
+            var trustError = false;
+            try { trustedProfiles = CadTrustPathRegistration.RegisterForCurrentUser(cad.Series, target); }
+            catch { trustError = true; }
             var mcp = await InstallMcpServerAndConfigureClient(cad.Version);
             Detect();
-            status.Text = $"AutoCAD 插件已安装（SHA-256 {hash[..12]}…）。{mcp} 启动/重启 AutoCAD 后点“测试 MCP 连接”。";
+            var trustStatus = trustedProfiles > 0
+                ? $"已为 {trustedProfiles} 个 AutoCAD 配置仅信任本插件目录。"
+                : trustError
+                    ? "未能自动登记 AutoCAD 插件可信目录；首次启动若出现安全提示，请只允许 AutoCadMcp.bundle。"
+                    : "未发现已初始化的 AutoCAD 用户配置；首次启动若出现安全提示，请只允许 AutoCadMcp.bundle。";
+            status.Text = $"AutoCAD 插件已安装（SHA-256 {hash[..12]}…）。{trustStatus}{mcp} 启动/重启 AutoCAD 后点“测试 MCP 连接”。";
         }
         catch (Exception e) { status.Text = (pluginInstalled ? "AutoCAD 插件已安装，但 MCP 服务配置未完成：" : "安装未完成：") + e.Message; }
         finally { install.Enabled = true; }
