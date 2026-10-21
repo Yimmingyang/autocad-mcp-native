@@ -53,7 +53,7 @@ try
     Equal("ci", npmStart.ArgumentList[1], "npm ci invocation");
     Equal("--no-audit", npmStart.ArgumentList[2], "npm audit flag");
     Equal("--no-fund", npmStart.ArgumentList[3], "npm fund flag");
-    var pluginTrustPath = Path.Combine(temp, "AutoCadMcp.bundle", "Contents", "Windows");
+    var pluginTrustPath = Path.Combine(temp, "AutoCadMcp.bundle", "...");
     var originalTrustedPaths = "\"%APPDATA%\\Autodesk\\ApplicationPlugins\";C:\\ExistingTrustedFolder";
     var updatedTrustedPaths = CadTrustPathRegistration.Append(originalTrustedPaths, pluginTrustPath);
     if (!updatedTrustedPaths.Contains("C:\\ExistingTrustedFolder", StringComparison.Ordinal)

@@ -33,7 +33,7 @@
 
 ### 快速安装
 
-从 [GitHub Releases](https://github.com/yanmiong/autocad-mcp-native/releases/latest) 下载 `AutoCadMcpInstaller.exe`，运行后选择 AutoCAD 版本并点“安装/修复”。安装期间关闭 AutoCAD。安装器会备份旧插件和 Codex MCP 配置，并只将本插件的 DLL 目录追加到对应 AutoCAD 配置的 `TRUSTEDPATHS`（不关闭 `SECURELOAD`）；打开 AutoCAD 后点“测试 MCP 连接”。
+从 [GitHub Releases](https://github.com/yanmiong/autocad-mcp-native/releases/latest) 下载 `AutoCadMcpInstaller.exe`，运行后选择 AutoCAD 版本并点“安装/修复”。安装期间关闭 AutoCAD。安装器会备份旧插件和 Codex MCP 配置，并只将本插件 bundle 子树追加到对应 AutoCAD 配置的 `TRUSTEDPATHS`（不关闭 `SECURELOAD`）；打开 AutoCAD 后点“测试 MCP 连接”。
 
 手动运行 MCP 服务或开发服务端时，可以从源码安装：
 

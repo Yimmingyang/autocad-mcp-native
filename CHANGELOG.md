@@ -1,5 +1,10 @@
 # 更新记录
 
+## 0.5.10 — 2026-10-21
+
+- 将 AutoCAD 可信路径改为只信任 `AutoCadMcp.bundle\...` 子树，使用 Autodesk 对 `TRUSTEDPATHS` 子目录通配的正式语法，避免按当前插件 DLL 的实际路径仍触发安全提示。
+- 保留用户已有可信目录，并保持 `SECURELOAD` 不变。
+
 ## 0.5.9 — 2026-10-21
 
 - 安装后为各 AutoCAD 配置仅登记 MCP 插件的 `Contents/Windows` 目录到 `TRUSTEDPATHS`，避免首次启动的未签名插件确认；保留用户现有信任目录，不关闭 `SECURELOAD`。

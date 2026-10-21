@@ -35,7 +35,7 @@ internal sealed class MainForm : Form
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(8) };
         buttons.Controls.AddRange([refresh, install, open, testConnection]);
         Controls.Add(buttons); Controls.Add(status); Controls.Add(list);
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("AutoCadMcpInstaller/0.5.9");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("AutoCadMcpInstaller/0.5.10");
         refresh.Click += (_, _) => Detect(); install.Click += async (_, _) => await InstallSelected(); open.Click += (_, _) => OpenSelected();
         testConnection.Click += async (_, _) => await TestConnection();
         Shown += (_, _) => Detect();
