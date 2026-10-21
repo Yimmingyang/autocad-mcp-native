@@ -34,7 +34,7 @@ New-Item -ItemType Directory -Path $payload -Force | Out-Null
 Get-ChildItem $target -File | Where-Object { $_.Extension -notin @('.pdb') -and $_.Name -notlike '*.runtimeconfig.json' } | Copy-Item -Destination $payload
 $manifest = @"
 <?xml version="1.0" encoding="utf-8"?>
-<ApplicationPackage SchemaVersion="1.0" AutodeskProduct="AutoCAD" Name="AutoCAD MCP $CadYear" AppVersion="0.5.8" ProductCode="{$([guid]::NewGuid().ToString())}" UpgradeCode="{7B20D7B7-18F7-4B77-A17D-AED95E33C105}">
+<ApplicationPackage SchemaVersion="1.0" AutodeskProduct="AutoCAD" Name="AutoCAD MCP $CadYear" AppVersion="0.5.9" ProductCode="{$([guid]::NewGuid().ToString())}" UpgradeCode="{7B20D7B7-18F7-4B77-A17D-AED95E33C105}">
   <CompanyDetails Name="AutoCAD MCP Native" />
   <Components>
     <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="$series" SeriesMax="$series" />

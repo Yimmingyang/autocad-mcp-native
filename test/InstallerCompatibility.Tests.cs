@@ -53,6 +53,14 @@ try
     Equal("ci", npmStart.ArgumentList[1], "npm ci invocation");
     Equal("--no-audit", npmStart.ArgumentList[2], "npm audit flag");
     Equal("--no-fund", npmStart.ArgumentList[3], "npm fund flag");
+    var pluginTrustPath = Path.Combine(temp, "AutoCadMcp.bundle", "Contents", "Windows");
+    var originalTrustedPaths = "\"%APPDATA%\\Autodesk\\ApplicationPlugins\";C:\\ExistingTrustedFolder";
+    var updatedTrustedPaths = CadTrustPathRegistration.Append(originalTrustedPaths, pluginTrustPath);
+    if (!updatedTrustedPaths.Contains("C:\\ExistingTrustedFolder", StringComparison.Ordinal)
+        || !updatedTrustedPaths.Contains($"\"{pluginTrustPath}\"", StringComparison.Ordinal))
+        throw new InvalidOperationException("AutoCAD trusted paths did not preserve existing locations and add the plug-in directory.");
+    Equal(updatedTrustedPaths, CadTrustPathRegistration.Append(updatedTrustedPaths, pluginTrustPath), "trusted path deduplication");
+    Equal($"\"{pluginTrustPath}\"", CadTrustPathRegistration.Append(".", pluginTrustPath), "trusted path empty-sentinel handling");
     foreach (var file in new[] { "acad.exe", "acmgd.dll", "acdbmgd.dll", "accoremgd.dll" }) File.WriteAllText(Path.Combine(temp, file), "fixture");
     File.WriteAllText(Path.Combine(temp, "acdbmgd.runtimeconfig.json"), """{"runtimeOptions":{"frameworks":[{"name":"Microsoft.NETCore.App","version":"8.0.0"},{"name":"Microsoft.WindowsDesktop.App","version":"8.0.0"}]}}""");
     Equal(8, CadCompatibility.ReadRuntimeMajor(temp), "multi-framework runtime detection");
@@ -72,4 +80,4 @@ try
     Equal(false, CadCompatibility.IsSupported("2020", temp), "missing API gate");
 }
 finally { Directory.Delete(temp, true); }
-Console.WriteLine("PASS: 8 AutoCAD series mappings, 8 target frameworks, runtimeconfig parsing, install gates, release SHA-256 validation, and npm invocation with paths containing spaces.");
+Console.WriteLine("PASS: 8 AutoCAD series mappings, 8 target frameworks, runtimeconfig parsing, install gates, release SHA-256 validation, npm path quoting, and scoped trusted-path registration.");
