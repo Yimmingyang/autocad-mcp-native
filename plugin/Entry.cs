@@ -13,7 +13,7 @@ using Autodesk.AutoCAD.Runtime;
 namespace AutoCadMcpPlugin;
 
 /// <summary>
-/// AutoCAD 2025 in-process MCP bridge (v0.5.5).
+/// AutoCAD 2025 in-process MCP bridge (v0.5.6).
 /// One named pipe, many native operations, self-describing registry.
 /// </summary>
 public sealed class Entry : IExtensionApplication
@@ -33,7 +33,7 @@ public sealed class Entry : IExtensionApplication
 #else
     private const string PipeName = "AutoCAD_MCP_2025_V2";
 #endif
-    private const string Version = "0.5.5";
+    private const string Version = "0.5.6";
     private const int PipeInstances = 4;
     private const double CoordinateLimit = 1e7;
 
@@ -1875,7 +1875,3 @@ internal static class TaskCompatibilityExtensions
         return await task;
     }
 }
-
-
-
-

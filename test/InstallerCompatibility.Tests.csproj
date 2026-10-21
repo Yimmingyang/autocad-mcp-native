@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\installer\CadCompatibility.cs" Link="CadCompatibility.cs" />
+    <Compile Include="..\installer\ReleaseAssetIntegrity.cs" Link="ReleaseAssetIntegrity.cs" />
   </ItemGroup>
 </Project>

@@ -1,5 +1,11 @@
 # 更新记录
 
+## 0.5.6 — 2026-10-21
+
+- 将 GitHub Release 查询改为 `releases/latest` 重定向和固定资产下载，避免公共 API 限流导致安装流程卡住或报错。
+- Release 附带源码包、服务包和安装器的 SHA-256 sidecar；安装器在提取/构建前校验源码和服务包。
+- 保留按本机 AutoCAD API/.NET Runtime 构建插件的安装流程和按年份连接测试。
+
 ## 0.5.5 — 2026-10-21
 
 - 安装器按目标 AutoCAD 本机 managed API 编译插件，按 `acdbmgd.runtimeconfig.json` 选择 .NET 8/10 SDK；2020–2024 使用 Framework 4.7/4.8 目标。

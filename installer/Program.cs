@@ -25,7 +25,8 @@ internal sealed class MainForm : Form
     private readonly Button testConnection = new() { Text = "测试 MCP 连接", Width = 130 };
     private readonly HttpClient http = new() { Timeout = TimeSpan.FromMinutes(30) };
     private List<CadInstall> installations = [];
-    private const string Repo = "https://api.github.com/repos/yanmiong/autocad-mcp-native";
+    private const string LatestReleaseUrl = "https://github.com/yanmiong/autocad-mcp-native/releases/latest";
+    private const string LatestAssetBaseUrl = "https://github.com/yanmiong/autocad-mcp-native/releases/latest/download/";
 
     public MainForm()
     {
@@ -34,7 +35,7 @@ internal sealed class MainForm : Form
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(8) };
         buttons.Controls.AddRange([refresh, install, open, testConnection]);
         Controls.Add(buttons); Controls.Add(status); Controls.Add(list);
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("AutoCadMcpInstaller/0.1");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("AutoCadMcpInstaller/0.5.6");
         refresh.Click += (_, _) => Detect(); install.Click += async (_, _) => await InstallSelected(); open.Click += (_, _) => OpenSelected();
         testConnection.Click += async (_, _) => await TestConnection();
         Shown += (_, _) => Detect();
@@ -156,17 +157,9 @@ internal sealed class MainForm : Form
         var dotnetMajor = year <= 2024 ? 8 : CadCompatibility.ReadRuntimeMajor(cad.Location ?? throw new InvalidOperationException("AutoCAD install path is missing.")) ?? throw new InvalidOperationException($"无法从 {cad.Location}\\acdbmgd.runtimeconfig.json 判断 AutoCAD {cad.Version} 的 .NET 运行时。");
         var sdk = await EnsureDotNetSdk(dotnetMajor);
         status.Text = $"正在获取 MCP 源码并针对 AutoCAD {cad.Version} 编译...";
-        var releaseJson = await http.GetStringAsync(Repo + "/releases/latest");
-        using var release = JsonDocument.Parse(releaseJson);
-        var tag = release.RootElement.GetProperty("tag_name").GetString() ?? throw new InvalidDataException("GitHub Release 缺少 tag_name。");
+        var tag = await GetLatestReleaseTag();
         var sourceZip = Path.Combine(temp, "source.zip");
-        var sourceAsset = release.RootElement.GetProperty("assets").EnumerateArray().FirstOrDefault(x => x.GetProperty("name").GetString() == "autocad-mcp-source.zip");
-        if (sourceAsset.ValueKind == JsonValueKind.Undefined) throw new InvalidDataException($"Release {tag} 缺少校验过的 autocad-mcp-source.zip，未构建。");
-        await File.WriteAllBytesAsync(sourceZip, await http.GetByteArrayAsync(sourceAsset.GetProperty("browser_download_url").GetString()!));
-        var sourceHash = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(sourceZip))).ToLowerInvariant();
-        var expectedSourceHash = sourceAsset.GetProperty("digest").GetString()?.Replace("sha256:", "", StringComparison.OrdinalIgnoreCase);
-        if (string.IsNullOrWhiteSpace(expectedSourceHash) || !sourceHash.Equals(expectedSourceHash, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("源码包缺少 GitHub SHA-256 digest 或校验失败，未构建。");
+        var sourceHash = await DownloadVerifiedReleaseAsset("autocad-mcp-source.zip", sourceZip);
         var sourceRoot = Path.Combine(temp, "source"); Directory.CreateDirectory(sourceRoot); ZipFile.ExtractToDirectory(sourceZip, sourceRoot);
         var project = Directory.GetFiles(sourceRoot, "AutoCadMcpPlugin.Legacy.csproj", SearchOption.AllDirectories).FirstOrDefault()
             ?? throw new InvalidDataException($"Release {tag} 未包含多版本插件构建工程；请先发布包含 Legacy.csproj 的源码版本。");
@@ -237,6 +230,28 @@ internal sealed class MainForm : Form
         if (Directory.Exists(sdkRoot)) Directory.Move(sdkRoot, backup);
         try { Directory.Move(stage, sdkRoot); } catch { if (Directory.Exists(backup)) Directory.Move(backup, sdkRoot); throw; }
         return dotnetPath;
+    }
+
+    private async Task<string> GetLatestReleaseTag()
+    {
+        using var response = await http.GetAsync(LatestReleaseUrl, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+        var finalUri = response.RequestMessage?.RequestUri ?? throw new InvalidDataException("GitHub 最新 Release 没有返回最终地址。");
+        var tag = Uri.UnescapeDataString(finalUri.Segments.Last().Trim('/'));
+        if (!tag.StartsWith('v') || tag.Length < 2) throw new InvalidDataException("GitHub 最新 Release 地址中未识别到版本 tag。");
+        return tag;
+    }
+
+    private async Task<string> DownloadVerifiedReleaseAsset(string assetName, string destination)
+    {
+        var url = LatestAssetBaseUrl + Uri.EscapeDataString(assetName);
+        var bytes = await http.GetByteArrayAsync(url);
+        var checksum = (await http.GetStringAsync(url + ".sha256")).Trim();
+        string actual;
+        try { actual = ReleaseAssetIntegrity.VerifySha256(bytes, checksum); }
+        catch (InvalidDataException e) { throw new InvalidDataException($"发行资产 {assetName} 的校验失败。", e); }
+        await File.WriteAllBytesAsync(destination, bytes);
+        return actual;
     }
 
     private static async Task<(int ExitCode, string Output)> RunCommand(string exe, IEnumerable<string> arguments, string cwd)
@@ -316,14 +331,8 @@ internal sealed class MainForm : Form
         var installRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoCadMcp", "server");
         Directory.CreateDirectory(installRoot);
         status.Text = "正在下载并安装 MCP 服务依赖...";
-        using var release = await http.GetStreamAsync(Repo + "/releases/latest"); using var doc = await JsonDocument.ParseAsync(release);
-        var asset = doc.RootElement.GetProperty("assets").EnumerateArray().FirstOrDefault(a => a.GetProperty("name").GetString() == "autocad-mcp-server.zip");
-        if (asset.ValueKind == JsonValueKind.Undefined) return "插件已安装；此 Release 尚无 MCP 服务包，客户端未配置。";
         var temp = Path.Combine(Path.GetTempPath(), "autocad-mcp-server-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(temp);
-        var zip = Path.Combine(temp, "server.zip"); await File.WriteAllBytesAsync(zip, await http.GetByteArrayAsync(asset.GetProperty("browser_download_url").GetString()!));
-        var hash = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(zip))).ToLowerInvariant();
-        var expected = asset.GetProperty("digest").GetString()?.Replace("sha256:", "", StringComparison.OrdinalIgnoreCase);
-        if (!string.IsNullOrEmpty(expected) && !hash.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("MCP 服务包 SHA-256 校验失败，未配置。");
+        var zip = Path.Combine(temp, "server.zip"); var hash = await DownloadVerifiedReleaseAsset("autocad-mcp-server.zip", zip);
         var staged = Path.Combine(temp, "server"); Directory.CreateDirectory(staged); ZipFile.ExtractToDirectory(zip, staged);
         if (!File.Exists(Path.Combine(staged, "package.json")) || !File.Exists(Path.Combine(staged, "src", "index.js"))) throw new InvalidDataException("MCP 服务包结构不完整。");
         var deps = await RunNpm(npm, staged);

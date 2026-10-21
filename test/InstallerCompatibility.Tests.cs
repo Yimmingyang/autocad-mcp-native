@@ -24,6 +24,12 @@ foreach (var year in new[] { "2025", "2026" })
     Equal("net8.0-windows", CadCompatibility.PluginTargetFramework(year, 8), $"{year} net8 target");
     Equal("net10.0-windows", CadCompatibility.PluginTargetFramework(year, 10), $"{year} net10 target");
 }
+var expectedAbcHash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+Equal(expectedAbcHash, ReleaseAssetIntegrity.VerifySha256(System.Text.Encoding.UTF8.GetBytes("abc"), expectedAbcHash + "  fixture.zip"), "release hash verification");
+try { ReleaseAssetIntegrity.VerifySha256(System.Text.Encoding.UTF8.GetBytes("abc"), new string('0', 64)); throw new InvalidOperationException("release hash mismatch was accepted"); }
+catch (InvalidDataException) { }
+try { ReleaseAssetIntegrity.VerifySha256(System.Text.Encoding.UTF8.GetBytes("abc"), "not-a-hash"); throw new InvalidOperationException("malformed release hash was accepted"); }
+catch (InvalidDataException) { }
 
 var temp = Path.Combine(Path.GetTempPath(), "cadcompat-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(temp);
@@ -45,4 +51,4 @@ try
     Equal(false, CadCompatibility.IsSupported("2020", temp), "missing API gate");
 }
 finally { Directory.Delete(temp, true); }
-Console.WriteLine("PASS: 7 AutoCAD series mappings, 7 target frameworks, runtimeconfig parsing, and install gates.");
+Console.WriteLine("PASS: 7 AutoCAD series mappings, 7 target frameworks, runtimeconfig parsing, install gates, and release SHA-256 validation.");

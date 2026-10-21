@@ -35,10 +35,20 @@ jobs:
           Copy-Item src\* -Destination (Join-Path $server 'src') -Recurse
           New-Item -ItemType Directory -Path dist -Force | Out-Null
           Compress-Archive -Path (Join-Path $server '*') -DestinationPath dist/autocad-mcp-server.zip
+      - name: Write SHA-256 sidecars
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -File -Recurse | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            [IO.File]::WriteAllText($_.FullName + '.sha256', $hash, [Text.Encoding]::ASCII)
+          }
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/installer/AutoCadMcpInstaller.exe
+            dist/installer/AutoCadMcpInstaller.exe.sha256
             dist/autocad-mcp-server.zip
+            dist/autocad-mcp-server.zip.sha256
             dist/autocad-mcp-source.zip
+            dist/autocad-mcp-source.zip.sha256
           generate_release_notes: true
