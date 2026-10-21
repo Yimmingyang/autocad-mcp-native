@@ -11,7 +11,7 @@
 
 ### Windows 安装器
 
-仓库新增 `installer/` WinForms 安装器项目：能扫描注册表发现 AutoCAD 2020–2026、显示系列号、区分当前可用插件和未发布的版本包，并为已发布的 AutoCAD 2025 包提供下载、SHA-256 校验、备份/安装和启动 AutoCAD。**检测到版本不等于该版本已被插件支持**；2020–2024、2026 的 .NET/API 构建与实机验证尚未完成，安装器会阻止跨版本误装。MCP 客户端配置和连接状态验证仍需按安装文档执行。
+仓库新增 `installer/` WinForms 安装器：扫描 AutoCAD 2020–2026 并显示构建号；对已验证的 AutoCAD 2025 `25.0.*` 包执行下载、SHA-256 校验与备份安装；部署便携 Node.js LTS、MCP 服务并更新 Codex 配置，提供实际 `get_bridge_status` 连接测试。**检测到版本不等于该版本已被插件支持**；当前仅放行已测的 AutoCAD 2025 `25.0.*` 构建，2020–2024、2025 其他更新构建和 2026 尚无对应插件包，安装器会阻止不匹配安装。
 
 构建安装器：使用 Windows .NET 8 SDK 运行 `dotnet publish installer/AutoCadMcpInstaller.csproj -c Release -o installer/publish`。单文件输出为 `installer/publish/AutoCadMcpInstaller.exe`。
 
