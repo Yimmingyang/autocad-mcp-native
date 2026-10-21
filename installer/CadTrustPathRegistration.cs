@@ -4,9 +4,16 @@ namespace AutoCadMcpInstaller;
 
 internal static class CadTrustPathRegistration
 {
+    private static string Normalize(string path)
+    {
+        if (path.EndsWith("\\...", StringComparison.Ordinal))
+            return Path.GetFullPath(path[..^4]).TrimEnd(Path.DirectorySeparatorChar) + "\\...";
+        return Path.GetFullPath(path);
+    }
+
     internal static string Append(string existing, string path)
     {
-        var target = Path.GetFullPath(path);
+        var target = Normalize(path);
         var entries = (existing ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(x => x.Trim('"'))
             .Where(x => x != ".")
@@ -16,7 +23,7 @@ internal static class CadTrustPathRegistration
             try
             {
                 var expanded = Environment.ExpandEnvironmentVariables(entry);
-                if (Path.GetFullPath(expanded).Equals(target, StringComparison.OrdinalIgnoreCase)) return existing ?? string.Empty;
+                if (Normalize(expanded).Equals(target, StringComparison.OrdinalIgnoreCase)) return existing ?? string.Empty;
             }
             catch { }
         }
@@ -26,7 +33,9 @@ internal static class CadTrustPathRegistration
 
     internal static int RegisterForCurrentUser(string series, string bundle)
     {
-        var trustedDirectory = Path.Combine(bundle, "Contents", "Windows");
+        // AutoCAD uses the \... suffix to trust the selected bundle and its
+        // nested Contents/Windows directory; trust no sibling plug-in bundles.
+        var trustedDirectory = Path.Combine(bundle, "...");
         using var root = Registry.CurrentUser.OpenSubKey($@"Software\Autodesk\AutoCAD\{series}");
         if (root is null) return 0;
         var updated = 0;
