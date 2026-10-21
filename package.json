@@ -1,6 +1,6 @@
 {
   "name": "autocad-mcp-native",
-  "version": "0.6.0",
+  "version": "0.6.2",
   "private": false,
   "type": "module",
   "description": "Local MCP bridge for inspecting and editing drawings in AutoCAD 2020–2027, compiled against the installed AutoCAD API.",

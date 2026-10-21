@@ -16,3 +16,4 @@ config.toml
 installer/bin/
 installer/obj/
 installer/publish/
+installer/publish-*/

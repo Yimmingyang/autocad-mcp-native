@@ -1,3 +1,8 @@
+## 0.6.2 — 2026-10-21
+
+- 修正 AutoCAD 2020 构建路径中两个可空引用警告对应的空引用风险。
+- 插件编译失败时将完整编译器输出保存到 `%LOCALAPPDATA%\\AutoCadMcp\\logs`，界面错误弹窗显示日志路径，避免关键 `error CS...` 被状态区域截断。
+
 ## 0.6.0 — 2026-10-21
 
 - Expand the Windows connector UI to detect and select OpenAI Codex or DeepSeek Harness as the MCP client.

@@ -40,7 +40,7 @@ internal sealed class MainForm : Form
         var clientLabel = new Label { Text = "选择要接入的 AI 客户端（仅显示检测到的客户端）", Dock = DockStyle.Top, Height = 28, Padding = new Padding(8, 6, 4, 2) };
         clientChoice.Dock = DockStyle.Top; clientChoice.Height = 30; clientChoice.Margin = new Padding(8);
         Controls.Add(buttons); Controls.Add(status); Controls.Add(clientStatus); Controls.Add(clientChoice); Controls.Add(clientLabel); Controls.Add(list);
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("AutoCadMcpInstaller/0.6.0");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("AutoCadMcpInstaller/0.6.2");
         refresh.Click += (_, _) => Detect(); install.Click += async (_, _) => await InstallSelected(); open.Click += (_, _) => OpenSelected();
         testConnection.Click += async (_, _) => await TestConnection();
         Shown += (_, _) => { Detect(); DetectClients(); };
@@ -191,7 +191,20 @@ internal sealed class MainForm : Form
         var buildOutput = Path.Combine(temp, "compiled");
         var args = new[] { "build", project, "-c", "Release", $"-p:CadYear={cad.Version}", $"-p:AutoCADDir={cad.Location}", $"-p:DotNetMajor={dotnetMajor}", "-o", buildOutput, "--nologo", "--verbosity", "quiet" };
         var result = await RunCommand(sdk, args, repoRoot);
-        if (result.ExitCode != 0) throw new InvalidOperationException($"AutoCAD {cad.Version} 插件构建失败（{result.ExitCode}）：{result.Output}");
+        if (result.ExitCode != 0)
+        {
+            string? logPath = null;
+            try
+            {
+                var logRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoCadMcp", "logs");
+                Directory.CreateDirectory(logRoot);
+                logPath = Path.Combine(logRoot, $"build-{cad.Version}-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+                await File.WriteAllTextAsync(logPath, result.Output, new UTF8Encoding(false));
+            }
+            catch { /* Keep the original compiler output available if the log directory cannot be written. */ }
+            var detail = logPath is null ? result.Output : $"详细编译日志：{logPath}";
+            throw new InvalidOperationException($"AutoCAD {cad.Version} 插件构建失败（退出码 {result.ExitCode}）。{detail}");
+        }
 
         var bundle = Path.Combine(temp, "generated", "AutoCadMcp.bundle");
         var payload = Path.Combine(bundle, "Contents", "Windows"); Directory.CreateDirectory(payload);
@@ -351,7 +364,12 @@ internal sealed class MainForm : Form
                     : "未发现已初始化的 AutoCAD 用户配置；首次启动若出现安全提示，请只允许 AutoCadMcp.bundle。";
             status.Text = $"AutoCAD 插件已安装（SHA-256 {hash[..12]}…）。{trustStatus}{mcp} 启动/重启 AutoCAD 后点“测试 MCP 连接”；AI 客户端需重新加载 MCP 配置。";
         }
-        catch (Exception e) { status.Text = (pluginInstalled ? "AutoCAD 插件已安装，但 MCP 服务配置未完成：" : "安装未完成：") + e.Message; }
+        catch (Exception e)
+        {
+            var message = (pluginInstalled ? "AutoCAD 插件已安装，但 MCP 服务配置未完成：" : "安装未完成：") + e.Message;
+            status.Text = message;
+            MessageBox.Show(this, message, "AutoCAD MCP 安装/修复", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
         finally { install.Enabled = true; }
     }
 

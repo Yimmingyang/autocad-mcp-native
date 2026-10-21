@@ -13,7 +13,7 @@ using Autodesk.AutoCAD.Runtime;
 namespace AutoCadMcpPlugin;
 
 /// <summary>
-/// AutoCAD in-process MCP bridge (v0.6.0).
+/// AutoCAD in-process MCP bridge (v0.6.2).
 /// One named pipe, many native operations, self-describing registry.
 /// </summary>
 public sealed class Entry : IExtensionApplication
@@ -35,7 +35,7 @@ public sealed class Entry : IExtensionApplication
 #else
     private const string PipeName = "AutoCAD_MCP_2025_V2";
 #endif
-    private const string Version = "0.6.0";
+    private const string Version = "0.6.2";
     private const int PipeInstances = 4;
     private const double CoordinateLimit = 1e7;
 
@@ -189,9 +189,9 @@ public sealed class Entry : IExtensionApplication
             await Gate.WaitAsync();
             try
             {
-                if (op is { OutsideContext: true } || DocumentFreeOps.Contains(tool))
+                if (op is { } registeredOp && (registeredOp.OutsideContext || DocumentFreeOps.Contains(tool)))
                 {
-                    try { result = op.Run(args); }
+                    try { result = registeredOp.Run(args); }
                     catch (System.Exception ex) { commandError = ex.Message; }
                 }
                 else
@@ -366,8 +366,11 @@ public sealed class Entry : IExtensionApplication
 
     private static string Str(JsonElement a, string name)
     {
-        var v = a.TryGetProperty(name, out var e) ? e.GetString()?.Trim() : null;
-        return string.IsNullOrEmpty(v) ? throw new ArgumentException($"{name} must not be empty.") : v;
+        if (!a.TryGetProperty(name, out var e) || e.ValueKind != JsonValueKind.String)
+            throw new ArgumentException($"{name} must be a string.");
+        var value = e.GetString()?.Trim();
+        if (string.IsNullOrEmpty(value)) throw new ArgumentException($"{name} must not be empty.");
+        return value;
     }
 
     private static string? OptStr(JsonElement a, string name) =>
@@ -1630,7 +1633,7 @@ public sealed class Entry : IExtensionApplication
 
     // --------------------------------------------------- sysvars / commands
 
-    private static object SysVar(string name)
+    private static object? SysVar(string name)
     {
         var value = Application.GetSystemVariable(name);
         return value switch

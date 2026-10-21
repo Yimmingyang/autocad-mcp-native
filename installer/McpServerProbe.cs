@@ -26,7 +26,7 @@ internal static class McpServerProbe
         using var cancel = new CancellationTokenSource(timeout);
         try
         {
-            await SendAsync(process, new { jsonrpc = "2.0", id = 1, method = "initialize", @params = new { protocolVersion = "2025-03-26", capabilities = new { }, clientInfo = new { name = "AutoCAD MCP Installer Diagnostics", version = "0.6.0" } } }, cancel.Token);
+            await SendAsync(process, new { jsonrpc = "2.0", id = 1, method = "initialize", @params = new { protocolVersion = "2025-03-26", capabilities = new { }, clientInfo = new { name = "AutoCAD MCP Installer Diagnostics", version = "0.6.2" } } }, cancel.Token);
             using (var initialized = JsonDocument.Parse(await ReadLineAsync(process, cancel.Token)))
                 if (initialized.RootElement.TryGetProperty("error", out var error)) throw new InvalidDataException("MCP initialize failed: " + error);
             await SendAsync(process, new { jsonrpc = "2.0", method = "notifications/initialized" }, cancel.Token);
