@@ -1,9 +1,9 @@
 {
   "name": "autocad-mcp-native",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "private": false,
   "type": "module",
-  "description": "Local MCP bridge for inspecting and editing drawings in AutoCAD 2020–2026, compiled against the installed AutoCAD API.",
+  "description": "Local MCP bridge for inspecting and editing drawings in AutoCAD 2020–2027, compiled against the installed AutoCAD API.",
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test test/autoload.test.js test/mcp.integration.test.js test/pipe-client.test.js",

@@ -7,11 +7,11 @@
 
 **AutoCAD MCP Native Bridge** 是 Windows 本机 MCP 桥接项目。Node.js MCP 服务通过命名管道与 AutoCAD 进程内的 .NET 插件通信，使兼容 MCP 客户端能够读取图纸状态、检查几何，并通过 AutoCAD API 执行编辑操作。
 
-> **实机验证范围：AutoCAD 2025 / R25.0 / Windows x64。** 安装器现可按 AutoCAD 本机 API 和 .NET 运行时动态编译 2020–2026 插件，不再把 2025 DLL 错装到其它版本；但 2020–2024、2025 .NET 10 更新版和 2026 的宿主加载/连接仍需逐类实机验证，不将“能编译”当作“实机兼容”。
+> **实机验证范围：AutoCAD 2025 / R25.0 / Windows x64，已完成安装、服务配置和 `get_bridge_status` 连接测试。** 安装器按本机 AutoCAD API 和运行时编译 2020–2027 插件；除 2025 实机验证外，其它版本仍需对应 CAD 主机加载/连接测试，不将“能编译”当作“实机兼容”。
 
 ### Windows 安装器
 
-仓库新增 `installer/` WinForms 安装器：扫描 AutoCAD 2020–2026 并显示构建号；安装时依据目标 AutoCAD 的 `acmgd.dll`、`acdbmgd.dll`、`accoremgd.dll` 和运行时配置在本机编译插件，生成对应 Bundle 后备份安装；部署便携 Node.js LTS、MCP 服务并更新 Codex 配置，提供 `get_bridge_status` 连接测试。AutoCAD 2020–2024 使用 .NET Framework 4.7/4.8 目标并以 .NET 8 SDK 构建；AutoCAD 2025/2026 根据 `acdbmgd.runtimeconfig.json` 选择 .NET 8 或 .NET 10 SDK。编译和 Bundle 系列校验是安装门槛，仍需目标 AutoCAD 实机加载/连接确认。
+仓库新增 `installer/` WinForms 安装器：扫描 AutoCAD 2020–2027 并显示构建号；安装时依据目标 AutoCAD 的 `acmgd.dll`、`acdbmgd.dll`、`accoremgd.dll` 和运行时配置在本机编译插件，生成对应 Bundle 后备份安装；部署便携 Node.js LTS、MCP 服务并更新 Codex 配置，提供 `get_bridge_status` 连接测试。AutoCAD 2020 使用 .NET Framework 4.7、2021–2024 使用 .NET Framework 4.8；2025/2026 按本机运行时选 .NET 8 或 10，2027 使用 .NET 10。编译和 Bundle 系列校验是安装门槛。AutoCAD 2027 对应 R26.0。
 
 构建安装器：使用 Windows .NET 8 SDK 运行 `dotnet publish installer/AutoCadMcpInstaller.csproj -c Release -o installer/publish`。单文件输出为 `installer/publish/AutoCadMcpInstaller.exe`。
 
@@ -27,9 +27,9 @@
 
 ### 要求
 
-- Windows x64；AutoCAD 2020–2026（安装时需要相应 API 文件和可识别的 .NET 运行时）。
+- Windows x64；AutoCAD 2020–2027（安装时需要相应 API 文件和可识别的 .NET 运行时）。
 - 安装器可部署便携 Node.js LTS 和从 Microsoft 官方源校验下载的 .NET SDK；编译阶段需要访问 GitHub 源码与 NuGet。
-- 兼容 MCP 客户端（示例为 Codex）。插件从源码构建需要 AutoCAD 2025 API DLL。
+- 兼容 MCP 客户端（示例为 Codex）。安装器需要所选 AutoCAD 版本的 managed API DLL；独立插件构建需要对应主机的 API。
 
 ### 快速安装
 
@@ -73,7 +73,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Build-AutoCADPlugin.ps1 `
 
 ### 路线图
 
-- 对 AutoCAD 2020–2026 各运行时组合完成实机加载与连接测试，并在兼容矩阵中记录结果。
+- 对 AutoCAD 2020–2027 各运行时组合完成实机加载与连接测试，并在兼容矩阵中记录结果。
 - 完善安装状态、更新与回滚界面。
 - 对新发布的 AutoCAD 主版本及时增加运行时/API 映射和对应测试。
 
