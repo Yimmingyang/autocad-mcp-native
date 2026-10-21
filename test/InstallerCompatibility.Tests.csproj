@@ -8,5 +8,6 @@
   <ItemGroup>
     <Compile Include="..\installer\CadCompatibility.cs" Link="CadCompatibility.cs" />
     <Compile Include="..\installer\ReleaseAssetIntegrity.cs" Link="ReleaseAssetIntegrity.cs" />
+    <Compile Include="..\installer\NpmRunner.cs" Link="NpmRunner.cs" />
   </ItemGroup>
 </Project>

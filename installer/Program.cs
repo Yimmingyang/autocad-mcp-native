@@ -335,7 +335,7 @@ internal sealed class MainForm : Form
         var zip = Path.Combine(temp, "server.zip"); var hash = await DownloadVerifiedReleaseAsset("autocad-mcp-server.zip", zip);
         var staged = Path.Combine(temp, "server"); Directory.CreateDirectory(staged); ZipFile.ExtractToDirectory(zip, staged);
         if (!File.Exists(Path.Combine(staged, "package.json")) || !File.Exists(Path.Combine(staged, "src", "index.js"))) throw new InvalidDataException("MCP 服务包结构不完整。");
-        var deps = await RunNpm(npm, staged);
+        var deps = await NpmRunner.RunAsync(node, npm, staged);
         if (deps.ExitCode != 0) throw new InvalidOperationException("npm ci 失败：" + deps.Output);
         var old = installRoot + ".backup-" + DateTime.Now.ToString("yyyyMMddHHmmss");
         if (Directory.Exists(installRoot)) Directory.Move(installRoot, old);
@@ -407,14 +407,6 @@ internal sealed class MainForm : Form
     {
         var p = new Process { StartInfo = new ProcessStartInfo(exe, args) { WorkingDirectory = cwd, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true } };
         p.Start(); var output = await p.StandardOutput.ReadToEndAsync(); await p.WaitForExitAsync(); return output;
-    }
-
-    private static async Task<(int ExitCode, string Output)> RunNpm(string npm, string cwd)
-    {
-        var p = new Process { StartInfo = new ProcessStartInfo("cmd.exe") { WorkingDirectory = cwd, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true } };
-        p.StartInfo.ArgumentList.Add("/d"); p.StartInfo.ArgumentList.Add("/c"); p.StartInfo.ArgumentList.Add($"\"{npm}\" ci --no-audit --no-fund");
-        p.Start(); var stdout = p.StandardOutput.ReadToEndAsync(); var stderr = p.StandardError.ReadToEndAsync(); await p.WaitForExitAsync();
-        return (p.ExitCode, (await stdout) + (await stderr));
     }
 
     private async Task TestConnection()

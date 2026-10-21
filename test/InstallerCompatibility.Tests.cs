@@ -35,6 +35,18 @@ var temp = Path.Combine(Path.GetTempPath(), "cadcompat-tests-" + Guid.NewGuid().
 Directory.CreateDirectory(temp);
 try
 {
+    var spacedRuntime = Path.Combine(temp, "Program Files", "Node.js");
+    Directory.CreateDirectory(Path.Combine(spacedRuntime, "node_modules", "npm", "bin"));
+    var npmCmd = Path.Combine(spacedRuntime, "npm.cmd");
+    var npmCli = Path.Combine(spacedRuntime, "node_modules", "npm", "bin", "npm-cli.js");
+    File.WriteAllText(npmCmd, "fixture"); File.WriteAllText(npmCli, "fixture");
+    var npmStart = NpmRunner.CreateStartInfo(Path.Combine(spacedRuntime, "node.exe"), npmCmd, Path.Combine(temp, "server folder"));
+    Equal(Path.Combine(spacedRuntime, "node.exe"), npmStart.FileName, "npm runner executable");
+    Equal(Path.Combine(temp, "server folder"), npmStart.WorkingDirectory, "npm runner working directory with spaces");
+    Equal(npmCli, npmStart.ArgumentList[0], "npm cli path with spaces");
+    Equal("ci", npmStart.ArgumentList[1], "npm ci invocation");
+    Equal("--no-audit", npmStart.ArgumentList[2], "npm audit flag");
+    Equal("--no-fund", npmStart.ArgumentList[3], "npm fund flag");
     foreach (var file in new[] { "acad.exe", "acmgd.dll", "acdbmgd.dll", "accoremgd.dll" }) File.WriteAllText(Path.Combine(temp, file), "fixture");
     File.WriteAllText(Path.Combine(temp, "acdbmgd.runtimeconfig.json"), """{"runtimeOptions":{"frameworks":[{"name":"Microsoft.NETCore.App","version":"8.0.0"},{"name":"Microsoft.WindowsDesktop.App","version":"8.0.0"}]}}""");
     Equal(8, CadCompatibility.ReadRuntimeMajor(temp), "multi-framework runtime detection");
@@ -51,4 +63,4 @@ try
     Equal(false, CadCompatibility.IsSupported("2020", temp), "missing API gate");
 }
 finally { Directory.Delete(temp, true); }
-Console.WriteLine("PASS: 7 AutoCAD series mappings, 7 target frameworks, runtimeconfig parsing, install gates, and release SHA-256 validation.");
+Console.WriteLine("PASS: 7 AutoCAD series mappings, 7 target frameworks, runtimeconfig parsing, install gates, release SHA-256 validation, and npm invocation with paths containing spaces.");
