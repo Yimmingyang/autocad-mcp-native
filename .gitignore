@@ -13,3 +13,6 @@ config.toml
 *.dwg
 *.dxf
 .tools/
+installer/bin/
+installer/obj/
+installer/publish/

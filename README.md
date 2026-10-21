@@ -9,6 +9,12 @@
 
 > **当前验证范围：AutoCAD 2025 / R25.0、Windows x64。** 本仓库包含 0.5.0 操作层和 2025 插件包。AutoCAD 2020–2024、2026 尚无本仓库提供并验证的对应插件构建；不要把 2025 DLL 加载到其它版本。跨版本安装 GUI 是后续路线，不代表当前版本已支持所有 2020+。
 
+### Windows 安装器
+
+仓库新增 `installer/` WinForms 安装器项目：能扫描注册表发现 AutoCAD 2020–2026、显示系列号、区分当前可用插件和未发布的版本包，并为已发布的 AutoCAD 2025 包提供下载、SHA-256 校验、备份/安装和启动 AutoCAD。**检测到版本不等于该版本已被插件支持**；2020–2024、2026 的 .NET/API 构建与实机验证尚未完成，安装器会阻止跨版本误装。MCP 客户端配置和连接状态验证仍需按安装文档执行。
+
+构建安装器：使用 Windows .NET 8 SDK 运行 `dotnet publish installer/AutoCadMcpInstaller.csproj -c Release -o installer/publish`。单文件输出为 `installer/publish/AutoCadMcpInstaller.exe`。
+
 ### 功能
 
 - 读取活动图纸、单位、范围、图层、模型空间实体、尺寸和文字。
